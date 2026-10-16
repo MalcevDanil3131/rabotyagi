@@ -1,0 +1,37 @@
+bin/
+obj/
+/packages/
+riderModule.iml
+/_ReSharper.Caches/
+# IDE
+.idea/
+.vs/
+*.DotSettings.user
+*.suo
+*.user
+
+# Frontend
+node_modules/
+dist/
+.vite/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Local databases and backups
+*.db
+*.sqlite
+*.sqlite3
+*.bak
+*.dump
+pgdata/
+
+# Test results
+TestResults/
+coverage/
+
+
+/rabotyagi/appsettings.json
+/rabotyagi/appsettings.Development.json

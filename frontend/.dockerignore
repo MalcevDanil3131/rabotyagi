@@ -1,0 +1,9 @@
+node_modules
+dist
+.git
+.env
+.env.*
+*.tsbuildinfo
+docs
+README.md
+BACKEND_CONTRACT.md
