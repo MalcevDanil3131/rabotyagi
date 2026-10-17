@@ -73,6 +73,9 @@ public class OrderApiController(OrderService service) : ControllerBase
     [HttpGet("{orderId:guid}/messages")]
     public async Task<ActionResult> GetMessages(Guid orderId) => await service.GetMessages(orderId);
 
+    [HttpGet("{orderId:guid}/history")]
+    public async Task<ActionResult> GetHistory(Guid orderId) => await service.GetHistory(orderId);
+
     [HttpPost("{orderId:guid}/messages")]
     public async Task<ActionResult> SendMessage(Guid orderId, SendMessageDto dto) => await service.SendMessage(orderId, dto);
 }

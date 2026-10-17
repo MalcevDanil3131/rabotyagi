@@ -83,6 +83,18 @@ export interface ApiMessage {
   text: string;
   created: string;
 }
+export interface ApiHistoryEvent {
+  id: string;
+  occurredAt: string;
+  eventType: 'created' | 'statusChanged' | 'executorAssigned' | 'reportSubmitted' | 'reportApproved' | 'reportReturned';
+  actorUserId: string;
+  actorNameSnapshot: string;
+  previousStatus: ApiStatus | null;
+  newStatus: ApiStatus;
+  executorId: string | null;
+  executorNameSnapshot: string | null;
+  comment: string | null;
+}
 export const apiBase = () => (import.meta.env?.VITE_API_BASE_URL || '').replace(/\/$/, '');
 export const photoUrl = (url: string) => `${apiBase()}${url}`;
 export class ApiError extends Error {
@@ -168,6 +180,7 @@ export const api = {
   review: (orderId: string, approved: boolean, feedback?: string) =>
     request<void>(`/order/${orderId}/review`, 'POST', { approved, feedback }),
   messages: (id: string) => request<ApiMessage[]>(`/order/${id}/messages`),
+  history: (id: string) => request<ApiHistoryEvent[]>(`/order/${id}/history`),
   sendMessage: (id: string, text: string) =>
     request<void>(`/order/${id}/messages`, 'POST', { text }),
   workers: () => request<ApiWorker[]>('/worker'),
