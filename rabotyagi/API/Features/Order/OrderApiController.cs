@@ -22,7 +22,7 @@ public class OrderApiController(OrderService service) : ControllerBase
     /// Изменить статус заявки
     /// </summary>
     [HttpPatch("status")]
-    [Authorize(Roles = $"{RolesConstants.WorkerRole},{RolesConstants.DispatcherRole},{RolesConstants.AdminRole},{RolesConstants.SuperAdminRole}")]
+    // Ownership, role and transition permissions are checked by OrderService.
     public async Task<ActionResult> ChangeOrderStatus(ChangeOrderStatusDto dto) =>
         await service.ChangeOrderStatus(dto);
 

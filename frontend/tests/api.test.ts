@@ -2,6 +2,27 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ApiError, api, request } from '../src/api.ts';
 
+test('отмена использует существующий PATCH и передаёт ошибки владельца и статуса', async () => {
+  const original = globalThis.fetch;
+  try {
+    globalThis.fetch = async (url, options) => {
+      assert.equal(url, '/api/order/status');
+      assert.equal(options?.method, 'PATCH');
+      assert.equal(options?.credentials, 'include');
+      assert.deepEqual(JSON.parse(String(options?.body)), { orderId: 'own-order', status: 'cancelled' });
+      return new Response(null, { status: 200 });
+    };
+    await api.status('own-order', 'cancelled');
+    for (const [status, message] of [[403, 'Нет прав на это действие.'], [409, 'Отменить заявку можно только до начала работ.']] as const) {
+      globalThis.fetch = async () => new Response(JSON.stringify({ error: message }), { status });
+      await assert.rejects(api.status('own-order', 'cancelled'),
+        (err) => err instanceof ApiError && err.status === status && err.message === message);
+    }
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
 test('POST без тела ответа считается успехом; cookie передаются в API', async () => {
   const original = globalThis.fetch;
   let options: RequestInit | undefined;
