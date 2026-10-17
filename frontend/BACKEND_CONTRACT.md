@@ -37,6 +37,7 @@ DTO заявки содержит ID, участников и телефоны, 
 | Из | В | Кто |
 | --- | --- | --- |
 | created | published / cancelled | Admin / SuperAdmin |
+| created / published / workerOnTheWay | cancelled | Владелец заявки; после начала работ отмена запрещена (409), чужая заявка — 403 |
 | published | workerOnTheWay | Worker со слотом / назначение Dispatcher |
 | workerOnTheWay | inProgress | назначенный Worker |
 | inProgress / rework | workFinished | назначенный Worker отправляет полный отчёт |

@@ -686,6 +686,11 @@ export default function ConnectedDashboard({
           workers={workers}
           busy={busy}
           run={run}
+          onCancelled={() => {
+            setOrders((current) =>
+              current.map((o) => (o.id === chosen.id ? { ...o, status: 'cancelled' } : o)),
+            );
+          }}
           onClose={() => setSelected(null)}
           onReport={() => setReportId(chosen.id)}
         />
@@ -709,6 +714,7 @@ function LiveDetails({
   run,
   onClose,
   onReport,
+  onCancelled,
 }: {
   order: ApiOrder;
   account: Account;
@@ -717,6 +723,7 @@ function LiveDetails({
   run: (action: () => Promise<unknown>, message?: string) => Promise<void>;
   onClose: () => void;
   onReport: () => void;
+  onCancelled: () => void;
 }) {
   const [messages, setMessages] = useState<ApiMessage[]>([]);
   const [text, setText] = useState('');
@@ -985,6 +992,23 @@ function LiveDetails({
         )}
       </div>
       <footer className="drawer-footer">
+        {order.initiatorId === account.id &&
+          ['created', 'published', 'workerOnTheWay'].includes(order.status) && (
+            <button
+              className="button secondary"
+              disabled={busy}
+              onClick={() => {
+                if (!window.confirm('Отменить вашу заявку? Это действие нельзя отменить.')) return;
+                void act(async () => {
+                  await api.status(order.id, 'cancelled');
+                  onCancelled();
+                  setEdit(false);
+                }, 'Заявка отменена.');
+              }}
+            >
+              Отменить заявку
+            </button>
+          )}
         {admin && order.status === 'created' && (
           <>
             <button

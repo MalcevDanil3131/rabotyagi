@@ -160,6 +160,55 @@ try
     Check(race.Count(x => x.StatusCode == HttpStatusCode.OK) == 1 && race.Count(x => x.StatusCode == HttpStatusCode.Conflict) == 1, "concurrent take has exactly one winner");
     var winner = race[0].StatusCode == HttpStatusCode.OK ? worker1 : worker2;
     var loser = winner == worker1 ? worker2 : worker1;
+    // Exercise cancellation via the real API and verify persistence with a new GET.
+    async Task Cancel(HttpClient actor, Guid orderId, HttpStatusCode expected) =>
+        await Status(actor, "order/status", expected, new { orderId, status = "cancelled" }, "PATCH");
+    foreach (var initialStatus in new[] { "created", "published", "workerOnTheWay" })
+    {
+        using var result = await client.PostAsJsonAsync("order", new
+        {
+            title = "Проверка отмены",
+            orderType = "sanitary",
+            comment = "Заявка для проверки отмены",
+            addressText = "Тестовая, 11"
+        });
+        Check(result.StatusCode == HttpStatusCode.Created, "cancellation order created");
+        var cancelId = JsonDocument.Parse(await result.Content.ReadAsStringAsync()).RootElement.GetProperty("id").GetGuid();
+        if (initialStatus != "created")
+            await Status(admin, "order/status", HttpStatusCode.OK, new { orderId = cancelId, status = "published" }, "PATCH");
+        if (initialStatus == "workerOnTheWay")
+            await Status(worker1, "order/executor", HttpStatusCode.OK, new { orderId = cancelId, executorId = w1 }, "PATCH");
+        await Cancel(anonymous, cancelId, HttpStatusCode.Unauthorized);
+        await Cancel(outsider, cancelId, HttpStatusCode.Forbidden);
+        await Cancel(dispatcher, cancelId, HttpStatusCode.Forbidden);
+        await Cancel(worker1, cancelId, HttpStatusCode.Forbidden);
+        Check((await Json(client, $"order/{cancelId}")).GetProperty("status").GetString() == initialStatus,
+            "unauthorized cancellation does not change status");
+        await Cancel(client, cancelId, HttpStatusCode.OK);
+        Check((await Json(client, $"order/{cancelId}")).GetProperty("status").GetString() == "cancelled",
+            $"owner cancellation from {initialStatus} persists");
+        await Cancel(client, cancelId, HttpStatusCode.Conflict);
+        await Status(worker1, "order/executor", HttpStatusCode.Conflict, new { orderId = cancelId, executorId = w1 }, "PATCH");
+    }
+    await Cancel(client, Guid.NewGuid(), HttpStatusCode.NotFound);
+    using var adminCancellation = await client.PostAsJsonAsync("order", new
+    {
+        title = "Проверка прав администратора",
+        orderType = "sanitary",
+        comment = "Заявка для проверки отклонения администратором",
+        addressText = "Тестовая, 11"
+    });
+    Check(adminCancellation.StatusCode == HttpStatusCode.Created, "admin cancellation order created");
+    var adminCancelId = JsonDocument.Parse(await adminCancellation.Content.ReadAsStringAsync()).RootElement.GetProperty("id").GetGuid();
+    await Cancel(admin, adminCancelId, HttpStatusCode.OK);
+    Check((await Json(client, $"order/{adminCancelId}")).GetProperty("status").GetString() == "cancelled",
+        "administrator can still reject another user's created order");
+    async Task RejectLateCancellation(string expectedStatus)
+    {
+        await Cancel(client, id, HttpStatusCode.Conflict);
+        Check((await Json(client, $"order/{id}")).GetProperty("status").GetString() == expectedStatus,
+            $"cancellation cannot change {expectedStatus}");
+    }
     await Status(loser, "order/status", HttpStatusCode.Forbidden, new
     {
         orderId = id,
@@ -170,6 +219,7 @@ try
         orderId = id,
         status = "inProgress"
     }, "PATCH");
+    await RejectLateCancellation("inProgress");
     await Status(admin, "order/status", HttpStatusCode.Conflict, new
     {
         orderId = id,
@@ -189,6 +239,7 @@ try
     }
     await Report(false);
     await Report(true);
+    await RejectLateCancellation("workFinished");
     order = await Json(client, $"order/{id}");
     var photo = order.GetProperty("photos")[0].GetProperty("id").GetGuid();
     await Status(client, $"order/{id}/photos/{photo}", HttpStatusCode.OK, null, "GET");
@@ -206,6 +257,7 @@ try
         approved = false,
         feedback = "Нужен другой ракурс"
     });
+    await RejectLateCancellation("rework");
     await Report(true);
     await Status(winner, $"order/{id}/messages", HttpStatusCode.OK, new
     {
@@ -221,12 +273,14 @@ try
         orderId = id,
         status = "completed"
     }, "PATCH");
+    await RejectLateCancellation("approved");
     await Status(admin, "order/status", HttpStatusCode.OK, new
     {
         orderId = id,
         status = "completed"
     }, "PATCH");
     Check((await Json(client, $"order/{id}")).GetProperty("status").GetString() == "completed", "full workflow persists completed status");
+    await RejectLateCancellation("completed");
     await Status(admin, $"user/{adminId}/blocked", HttpStatusCode.BadRequest, new
     {
         blocked = true

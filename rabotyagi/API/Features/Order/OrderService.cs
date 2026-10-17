@@ -62,11 +62,15 @@ public class OrderService(AppDbContext dbContext, ClaimsPrincipalUtils claimsPri
         var order = await dbContext.Orders.FirstOrDefaultAsync(x => x.Id == dto.OrderId);
         if (order == null)
             return response.WithStatusCode(HttpStatusCode.NotFound).WithErrorMsg("Заявка не найдена.");
-        var permitted = (IsAdmin && dto.Status is EOrderStatus.Published or EOrderStatus.Completed or EOrderStatus.Cancelled)
+        var ownerCancellation = order.InitiatorId == claimsPrincipal.ReqUserId && dto.Status == EOrderStatus.Cancelled;
+        var permitted = ownerCancellation || (IsAdmin && dto.Status is EOrderStatus.Published or EOrderStatus.Completed or EOrderStatus.Cancelled)
             || (claimsPrincipal.IsWorker && order.ExecutorId == claimsPrincipal.ReqUserId && dto.Status == EOrderStatus.InProgress);
         if (!permitted)
             return response.WithStatusCode(HttpStatusCode.Forbidden).WithErrorMsg("Нет прав на это действие.");
-        var valid = (order.Status == EOrderStatus.Created && dto.Status is EOrderStatus.Published or EOrderStatus.Cancelled)
+        if (ownerCancellation && order.Status is not (EOrderStatus.Created or EOrderStatus.Published or EOrderStatus.WorkerOnTheWay))
+            return response.WithStatusCode(HttpStatusCode.Conflict).WithErrorMsg("Отменить заявку можно только до начала работ. Обновите заявку.");
+        var valid = ownerCancellation
+            || (order.Status == EOrderStatus.Created && dto.Status is EOrderStatus.Published or EOrderStatus.Cancelled)
             || (order.Status == EOrderStatus.Approved && dto.Status == EOrderStatus.Completed)
             || (order.Status == EOrderStatus.WorkerOnTheWay && dto.Status == EOrderStatus.InProgress);
         if (!valid)
