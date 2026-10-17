@@ -19,6 +19,7 @@ import { api, ApiError, photoUrl } from './api';
 import type { Account, Address, ApiOrder, ApiWorker, ApiUser, ApiMessage, ApiStatus } from './api';
 import { Avatar, Badge, Dialog, Empty, OrdersTable, SearchField } from './components';
 import { CreateOrder, ReportForm } from './OrderDialogs';
+import { OrderHistory } from './OrderHistory';
 import { AddressForm, PasswordForm } from './LiveWorkspace';
 import { categories, formatDate, formatTime, statuses } from './domain';
 import type { Order, Worker, Status, Report, Photo } from './domain';
@@ -726,6 +727,7 @@ function LiveDetails({
   onCancelled: () => void;
 }) {
   const [messages, setMessages] = useState<ApiMessage[]>([]);
+  const [historyRevision, setHistoryRevision] = useState(0);
   const [text, setText] = useState('');
   const [feedback, setFeedback] = useState('');
   const [rework, setRework] = useState(false);
@@ -764,6 +766,7 @@ function LiveDetails({
     setError('');
     try {
       await run(fn, message);
+      setHistoryRevision((value) => value + 1);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Не удалось сохранить.');
     }
@@ -985,6 +988,7 @@ function LiveDetails({
             </form>
           )}
         </section>
+        <OrderHistory key={order.id} orderId={order.id} revision={`${order.updated}:${historyRevision}`} />
         {error && (
           <p className="error" role="alert">
             {error}

@@ -282,6 +282,52 @@ namespace rabotyagi.DataAccess.Migrations
                     b.ToTable("Orders");
                 });
 
+            modelBuilder.Entity("rabotyagi.DataAccess.Entities.OrderHistoryEvent", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ActorNameSnapshot")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<Guid>("ActorUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Comment")
+                        .HasColumnType("text");
+
+                    b.Property<string>("EventType")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<Guid?>("ExecutorId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ExecutorNameSnapshot")
+                        .HasColumnType("text");
+
+                    b.Property<string>("NewStatus")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset>("OccurredAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("OrderId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("PreviousStatus")
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OrderId", "OccurredAt", "Id");
+
+                    b.ToTable("OrderHistoryEvents");
+                });
+
             modelBuilder.Entity("rabotyagi.DataAccess.Entities.OrderMessage", b =>
                 {
                     b.Property<Guid>("Id")
@@ -520,6 +566,17 @@ namespace rabotyagi.DataAccess.Migrations
                     b.Navigation("Executor");
 
                     b.Navigation("Initiator");
+                });
+
+            modelBuilder.Entity("rabotyagi.DataAccess.Entities.OrderHistoryEvent", b =>
+                {
+                    b.HasOne("rabotyagi.DataAccess.Entities.Order", "Order")
+                        .WithMany()
+                        .HasForeignKey("OrderId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Order");
                 });
 
             modelBuilder.Entity("rabotyagi.DataAccess.Entities.OrderMessage", b =>

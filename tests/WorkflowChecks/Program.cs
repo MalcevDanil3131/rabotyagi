@@ -281,6 +281,26 @@ try
     }, "PATCH");
     Check((await Json(client, $"order/{id}")).GetProperty("status").GetString() == "completed", "full workflow persists completed status");
     await RejectLateCancellation("completed");
+    await HistoryChecks.Run(connection.ConnectionString, id, winner == worker1 ? w1 : w2,
+        client, admin, dispatcher, winner, loser, outsider, anonymous, Check);
+    var historyBeforeRestart = (await Json(client, $"order/{id}/history")).GetRawText();
+    server!.Kill(true);
+    await server.WaitForExitAsync();
+    server = Process.Start(start)!;
+    server.OutputDataReceived += (_, e) => { if (e.Data != null) lock (output) output.Add(e.Data); };
+    server.ErrorDataReceived += (_, e) => { if (e.Data != null) lock (output) output.Add(e.Data); };
+    server.BeginOutputReadLine();
+    server.BeginErrorReadLine();
+    ready = false;
+    for (var i = 0; i < 100; i++)
+    {
+        try { using var response = await anonymous.GetAsync("account"); ready = response.StatusCode == HttpStatusCode.Unauthorized; }
+        catch (HttpRequestException) { }
+        if (ready || server.HasExited) break;
+        await Task.Delay(200);
+    }
+    Check(ready, "isolated API restarts");
+    Check((await Json(client, $"order/{id}/history")).GetRawText() == historyBeforeRestart, "history survives server restart unchanged");
     await Status(admin, $"user/{adminId}/blocked", HttpStatusCode.BadRequest, new
     {
         blocked = true

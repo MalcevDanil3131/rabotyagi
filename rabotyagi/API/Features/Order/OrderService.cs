@@ -52,6 +52,7 @@ public class OrderService(AppDbContext dbContext, ClaimsPrincipalUtils claimsPri
             ScheduledAt = dto.ScheduledAt?.ToUniversalTime()
         };
         dbContext.Orders.Add(order);
+        await AddHistory(order.Id, EOrderHistoryEventType.Created, null, order.Status);
         await dbContext.SaveChangesAsync();
         return response.WithStatusCode(HttpStatusCode.Created).WithData(MapToDto(order));
     }
@@ -75,6 +76,7 @@ public class OrderService(AppDbContext dbContext, ClaimsPrincipalUtils claimsPri
             || (order.Status == EOrderStatus.WorkerOnTheWay && dto.Status == EOrderStatus.InProgress);
         if (!valid)
             return response.WithStatusCode(HttpStatusCode.Conflict).WithErrorMsg("Этот переход статуса недоступен. Обновите заявку.");
+        await AddHistory(order.Id, EOrderHistoryEventType.StatusChanged, order.Status, dto.Status);
         order.Status = dto.Status;
         return await SaveOrder(order);
     }
@@ -96,11 +98,16 @@ public class OrderService(AppDbContext dbContext, ClaimsPrincipalUtils claimsPri
         if (!available)
             return response.WithStatusCode(HttpStatusCode.Conflict).WithErrorMsg("У специалиста нет активного слота.");
         // Conditional UPDATE makes taking an order atomic: only one worker can win.
+        await using var transaction = await dbContext.Database.BeginTransactionAsync();
         var changed = await dbContext.Orders.Where(x => x.Id == dto.OrderId && x.Status == EOrderStatus.Published && x.ExecutorId == null)
             .ExecuteUpdateAsync(setters => setters.SetProperty(x => x.ExecutorId, dto.ExecutorId)
                 .SetProperty(x => x.Status, EOrderStatus.WorkerOnTheWay).SetProperty(x => x.Updated, now));
         if (changed == 0)
             return response.WithStatusCode(HttpStatusCode.Conflict).WithErrorMsg("Заявка уже занята или не опубликована.");
+        await AddHistory(dto.OrderId, EOrderHistoryEventType.ExecutorAssigned,
+            EOrderStatus.Published, EOrderStatus.WorkerOnTheWay, executorId: dto.ExecutorId);
+        await dbContext.SaveChangesAsync();
+        await transaction.CommitAsync();
         return response.WithStatusCode(HttpStatusCode.OK);
     }
 
@@ -196,6 +203,8 @@ public class OrderService(AppDbContext dbContext, ClaimsPrincipalUtils claimsPri
             order.ReviewFeedback = null;
             order.ReviewedAt = null;
             order.ReviewerId = null;
+            await AddHistory(order.Id, EOrderHistoryEventType.ReportSubmitted, order.Status,
+                EOrderStatus.WorkFinished, comment: order.ReportSummary);
             order.Status = EOrderStatus.WorkFinished;
             order.Updated = DateTimeOffset.UtcNow;
             await dbContext.SaveChangesAsync();
@@ -225,7 +234,10 @@ public class OrderService(AppDbContext dbContext, ClaimsPrincipalUtils claimsPri
             return response.WithStatusCode(HttpStatusCode.Conflict).WithErrorMsg("Заявка не ожидает проверки отчёта.");
         if (!dto.Approved && string.IsNullOrWhiteSpace(dto.Feedback))
             return response.WithStatusCode(HttpStatusCode.BadRequest).WithErrorMsg("Укажите, что нужно исправить.");
-        order.Status = dto.Approved ? EOrderStatus.Approved : EOrderStatus.Rework;
+        var newStatus = dto.Approved ? EOrderStatus.Approved : EOrderStatus.Rework;
+        await AddHistory(order.Id, dto.Approved ? EOrderHistoryEventType.ReportApproved : EOrderHistoryEventType.ReportReturned,
+            order.Status, newStatus, comment: dto.Feedback?.Trim());
+        order.Status = newStatus;
         order.ReviewFeedback = dto.Feedback?.Trim();
         order.ReviewedAt = DateTimeOffset.UtcNow;
         order.ReviewerId = claimsPrincipal.ReqUserId;
@@ -284,6 +296,41 @@ public class OrderService(AppDbContext dbContext, ClaimsPrincipalUtils claimsPri
         });
         await dbContext.SaveChangesAsync();
         return response.WithStatusCode(HttpStatusCode.OK);
+    }
+
+    public async Task<ApiResponse<List<OrderHistoryEventDto>>> GetHistory(Guid orderId)
+    {
+        var response = new ApiResponse<List<OrderHistoryEventDto>>();
+        var visible = VisibleOrders().Where(x => x.Id == orderId);
+        if (!await visible.AnyAsync())
+            return response.WithStatusCode(HttpStatusCode.NotFound).WithErrorMsg("Заявка не найдена или недоступна.");
+        var events = await dbContext.OrderHistoryEvents.AsNoTracking()
+            .Where(x => x.OrderId == orderId && visible.Any(o => o.Id == x.OrderId))
+            .OrderBy(x => x.OccurredAt).ThenBy(x => x.Id)
+            .Select(x => new OrderHistoryEventDto
+            {
+                Id = x.Id, OccurredAt = x.OccurredAt, EventType = x.EventType,
+                ActorUserId = x.ActorUserId, ActorNameSnapshot = x.ActorNameSnapshot,
+                PreviousStatus = x.PreviousStatus, NewStatus = x.NewStatus,
+                ExecutorId = x.ExecutorId, ExecutorNameSnapshot = x.ExecutorNameSnapshot, Comment = x.Comment
+            }).ToListAsync();
+        return response.WithStatusCode(HttpStatusCode.OK).WithData(events);
+    }
+
+    private async Task AddHistory(Guid orderId, EOrderHistoryEventType type,
+        EOrderStatus? previousStatus, EOrderStatus newStatus, Guid? executorId = null, string? comment = null)
+    {
+        var actor = await dbContext.Users.FirstAsync(x => x.Id == claimsPrincipal.ReqUserId);
+        var executorName = executorId.HasValue
+            ? await dbContext.Users.Where(x => x.Id == executorId).Select(x => x.Name + " " + x.Surname).FirstAsync()
+            : null;
+        dbContext.OrderHistoryEvents.Add(new OrderHistoryEvent
+        {
+            OrderId = orderId, EventType = type, ActorUserId = actor.Id,
+            ActorNameSnapshot = $"{actor.Name} {actor.Surname}".Trim(),
+            PreviousStatus = previousStatus, NewStatus = newStatus,
+            ExecutorId = executorId, ExecutorNameSnapshot = executorName, Comment = comment
+        });
     }
 
     private async Task<ApiResponse> SaveOrder(DataAccess.Entities.Order order)

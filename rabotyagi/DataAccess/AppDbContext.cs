@@ -34,10 +34,15 @@ public class AppDbContext : IdentityDbContext<User, IdentityRole<Guid>, Guid>
         modelBuilder.Entity<Order>().Property(x => x.Updated).IsConcurrencyToken();
         modelBuilder.Entity<Order>().HasIndex(x => x.Status);
         modelBuilder.Entity<OrderMessage>().HasIndex(x => new { x.OrderId, x.Created });
+        modelBuilder.Entity<OrderHistoryEvent>().HasIndex(x => new { x.OrderId, x.OccurredAt, x.Id });
+        modelBuilder.Entity<OrderHistoryEvent>().HasOne(x => x.Order).WithMany()
+            .HasForeignKey(x => x.OrderId).OnDelete(DeleteBehavior.Restrict);
     }
 
     protected override void ConfigureConventions(ModelConfigurationBuilder configurationBuilder)
     {
         configurationBuilder.Properties<Enum>().HaveConversion<string>();
     }
+
+    public DbSet<OrderHistoryEvent> OrderHistoryEvents { get; set; }
 }
