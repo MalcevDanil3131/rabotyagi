@@ -52,8 +52,15 @@ public class OrderApiController(OrderService service) : ControllerBase
     /// Получить все заказы пользователя
     /// </summary>
     [HttpGet]
-    public async Task<ActionResult> GetAllOrdersByUser(Guid? userId, int page = 1, int pageSize = 50) =>
-        await service.GetOrders(userId, page, pageSize);
+    public async Task<ActionResult> GetAllOrdersByUser(Guid? userId, int page = 1, int pageSize = 50, rabotyagi.DataAccess.Enums.EOrderStatus? status = null) =>
+        await service.GetOrders(userId, page, pageSize, status);
+
+    [HttpGet("queues")]
+    [Authorize(Roles = $"{RolesConstants.AdminRole},{RolesConstants.DispatcherRole},{RolesConstants.SuperAdminRole}")]
+    public async Task<ActionResult> GetQueueCounts() => await service.GetQueueCounts();
+
+    [HttpGet("page")]
+    public async Task<ActionResult> GetOrderPage([FromQuery] OrderPageQuery query) => await service.GetOrderPage(query);
 
     [HttpPost("{orderId:guid}/report")]
     [Authorize(Roles = RolesConstants.WorkerRole)]
@@ -62,7 +69,6 @@ public class OrderApiController(OrderService service) : ControllerBase
         await service.SubmitReport(orderId, dto);
 
     [HttpPost("{orderId:guid}/review")]
-    [Authorize(Roles = $"{RolesConstants.DispatcherRole},{RolesConstants.SuperAdminRole}")]
     public async Task<ActionResult> ReviewReport(Guid orderId, ReviewReportDto dto) =>
         await service.ReviewReport(orderId, dto);
 
@@ -76,6 +82,18 @@ public class OrderApiController(OrderService service) : ControllerBase
     [HttpGet("{orderId:guid}/history")]
     public async Task<ActionResult> GetHistory(Guid orderId) => await service.GetHistory(orderId);
 
+    [HttpPatch("{orderId:guid}/executor")]
+    [Authorize(Roles = $"{RolesConstants.DispatcherRole},{RolesConstants.SuperAdminRole}")]
+    public async Task<ActionResult> ReassignExecutor(Guid orderId, ReassignExecutorDto dto) =>
+        await service.ReassignExecutor(orderId, dto);
+
     [HttpPost("{orderId:guid}/messages")]
     public async Task<ActionResult> SendMessage(Guid orderId, SendMessageDto dto) => await service.SendMessage(orderId, dto);
+
+    [HttpPost("{orderId:guid}/price")]
+    [Authorize(Roles = RolesConstants.WorkerRole)]
+    public async Task<ActionResult> ProposePrice(Guid orderId, ProposePriceDto dto) => await service.ProposePrice(orderId, dto);
+
+    [HttpPost("{orderId:guid}/price/decision")]
+    public async Task<ActionResult> DecidePrice(Guid orderId, DecidePriceDto dto) => await service.DecidePrice(orderId, dto);
 }

@@ -35,6 +35,11 @@ public class Order : BaseEntity
     public string? ReviewFeedback { get; set; }
     public DateTimeOffset? ReviewedAt { get; set; }
     public Guid? ReviewerId { get; set; }
+    public decimal? PriceAmount { get; set; }
+    public string? PriceScope { get; set; }
+    public EOrderPriceStatus PriceStatus { get; set; }
+    public Guid? PriceExecutorId { get; set; }
+    public DateTimeOffset? PriceAcceptedAt { get; set; }
     public List<OrderPhoto> Photos { get; set; } = [];
     public List<OrderMessage> Messages { get; set; } = [];
 }

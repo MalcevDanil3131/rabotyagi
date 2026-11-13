@@ -1,0 +1,120 @@
+name: rabotyagi-production
+
+x-api: &api
+  image: rabotyagi-production-api:${RABOTYAGI_RELEASE:-local}
+  build:
+    context: .
+    dockerfile: rabotyagi/Dockerfile
+  environment: &api-environment
+    ASPNETCORE_ENVIRONMENT: Production
+    DOTNET_ENVIRONMENT: Production
+    ASPNETCORE_HTTP_PORTS: "8080"
+    AllowedHosts: ${SITE_DOMAIN:?Set SITE_DOMAIN}
+    Demo__Enabled: "false"
+    Database__ApplyMigrationsOnStartup: "false"
+    BootstrapAdmin__Enabled: "false"
+    ConnectionStrings__ProductionConnection: "Host=postgres;Port=5432;Database=${RABOTYAGI_DB_NAME:-rabotyagi};Username=${RABOTYAGI_DB_USER:-rabotyagi};Password=${RABOTYAGI_DB_PASSWORD:?Set RABOTYAGI_DB_PASSWORD}"
+    ReverseProxy__KnownProxies__0: ${RABOTYAGI_PROXY_IP:-172.29.230.10}
+    RequestSecurity__RequireHttpsCookies: "true"
+    RequestSecurity__AllowedOrigins__0: https://${SITE_DOMAIN:?Set SITE_DOMAIN}
+    Uploads__Path: /app/uploads
+    DataProtection__Path: /app/keys
+  volumes:
+    - report_photos:/app/uploads
+    - identity_keys:/app/keys
+  networks:
+    - proxy
+    - database
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:15
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${RABOTYAGI_DB_NAME:-rabotyagi}
+      POSTGRES_USER: ${RABOTYAGI_DB_USER:-rabotyagi}
+      POSTGRES_PASSWORD: ${RABOTYAGI_DB_PASSWORD:?Set RABOTYAGI_DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - database
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U ${RABOTYAGI_DB_USER:-rabotyagi} -d ${RABOTYAGI_DB_NAME:-rabotyagi}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    <<: *api
+    restart: unless-stopped
+
+  migrate:
+    <<: *api
+    profiles: [tools]
+    restart: "no"
+    environment:
+      <<: *api-environment
+      Database__MigrateOnly: "true"
+
+  bootstrap:
+    <<: *api
+    profiles: [tools]
+    restart: "no"
+    environment:
+      <<: *api-environment
+      BootstrapAdmin__InitializeOnly: "true"
+      BootstrapAdmin__Enabled: "true"
+      BootstrapAdmin__Email: ${BOOTSTRAP_ADMIN_EMAIL:-}
+      BootstrapAdmin__Password: ${BOOTSTRAP_ADMIN_PASSWORD:-}
+
+  frontend:
+    image: rabotyagi-production-frontend:${RABOTYAGI_RELEASE:-local}
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: production
+      extra_hosts:
+        - "registry.npmjs.org=${NPM_REGISTRY_IP:-104.16.24.34}"
+    restart: unless-stopped
+    environment:
+      SITE_DOMAIN: ${SITE_DOMAIN:?Set SITE_DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL:?Set ACME_EMAIL}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      proxy:
+        ipv4_address: ${RABOTYAGI_PROXY_IP:-172.29.230.10}
+      public:
+    depends_on:
+      api:
+        condition: service_started
+    healthcheck:
+      test: [CMD-SHELL, "wget -q -O /dev/null http://127.0.0.1:2019/config/ && wget -q --header='Host: ${SITE_DOMAIN}' -O /dev/null http://api:8080/healthz/ready"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 12
+
+networks:
+  proxy:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${RABOTYAGI_PROXY_SUBNET:-172.29.230.0/24}
+  database:
+    internal: true
+  public:
+
+volumes:
+  postgres_data:
+  report_photos:
+  identity_keys:
+  caddy_data:
+  caddy_config:

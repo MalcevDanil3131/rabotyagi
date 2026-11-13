@@ -285,7 +285,7 @@ export function ReportForm({
           </button>
           <button className="button primary" disabled={busy}>
             <Send size={17} />
-            Отправить диспетчеру
+            Отправить клиенту
           </button>
         </footer>
       </form>

@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using rabotyagi.Core.Consts;
+using rabotyagi.DataAccess;
 using rabotyagi.DataAccess.Entities;
 
 namespace rabotyagi.Core.Extensions;
@@ -10,57 +11,40 @@ public static class ConfigExtensions
     public static async Task SeedRolesAndAdminAsync(this WebApplication app)
     {
         using var scope = app.Services.CreateScope();
-        var services = scope.ServiceProvider;
-        var roleManager = services.GetRequiredService<RoleManager<IdentityRole<Guid>>>();
-        var userManager = services.GetRequiredService<UserManager<User>>();
-        const string password = "Wertukan!234";
-
-        foreach (var roleName in RolesConstants.AllRoles)
-        {
-            if (!await roleManager.RoleExistsAsync(roleName))
-                CheckResult(await roleManager.CreateAsync(new IdentityRole<Guid> { Name = roleName }));
-
-            var role = await roleManager.Roles.FirstAsync(x => x.Name == roleName);
-            var email = $"{roleName.ToLowerInvariant()}@mail.ru";
-            var user = await userManager.FindByEmailAsync(email);
-
-            if (user == null)
-            {
-                user = new User
-                {
-                    Name = roleName,
-                    Surname = roleName,
-                    UserName = email,
-                    Email = email,
-                    RoleId = role.Id
-                };
-
-                CheckResult(await userManager.CreateAsync(user, password));
-            }
-            else
-            {
-                user.RoleId = role.Id;
-                CheckResult(await userManager.UpdateAsync(user));
-
-                if (!await userManager.CheckPasswordAsync(user, password))
-                {
-                    var token = await userManager.GeneratePasswordResetTokenAsync(user);
-                    CheckResult(await userManager.ResetPasswordAsync(user, token, password));
-                }
-            }
-
-            var otherRoles = (await userManager.GetRolesAsync(user)).Where(x => x != roleName).ToList();
-            if (otherRoles.Count > 0)
-                CheckResult(await userManager.RemoveFromRolesAsync(user, otherRoles));
-
-            if (!await userManager.IsInRoleAsync(user, roleName))
-                CheckResult(await userManager.AddToRoleAsync(user, roleName));
-        }
+        await InitializeIdentityAsync(scope.ServiceProvider, app.Configuration);
     }
 
-    private static void CheckResult(IdentityResult result)
+    // No demo-account seeder: fixtures belong exclusively to the isolated test harness.
+    public static async Task InitializeIdentityAsync(IServiceProvider services, IConfiguration configuration)
     {
-        if (!result.Succeeded)
-            throw new InvalidOperationException(string.Join(", ", result.Errors.Select(x => x.Description)));
+        var roles = services.GetRequiredService<RoleManager<IdentityRole<Guid>>>();
+        foreach (var roleName in RolesConstants.AllRoles)
+            if (!await roles.RoleExistsAsync(roleName))
+                CheckResult(await roles.CreateAsync(new IdentityRole<Guid> { Name = roleName }), "Role initialization failed.");
+
+        if (!configuration.GetValue<bool>("BootstrapAdmin:Enabled")) return;
+        var email = configuration["BootstrapAdmin:Email"]?.Trim();
+        var password = configuration["BootstrapAdmin:Password"];
+        if (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(password))
+            throw new InvalidOperationException("BootstrapAdmin requires Email and Password. Disable bootstrap after initial provisioning.");
+
+        var db = services.GetRequiredService<AppDbContext>();
+        var users = services.GetRequiredService<UserManager<User>>();
+        await using var transaction = await db.Database.BeginTransactionAsync();
+        // Never adopt an existing account, even if it currently has elevated privileges.
+        if (await users.FindByEmailAsync(email) != null || await users.FindByNameAsync(email) != null)
+            throw new InvalidOperationException("BootstrapAdmin account already exists. No account was changed. Disable bootstrap or provision a different new account.");
+        var role = await roles.FindByNameAsync(RolesConstants.SuperAdminRole)
+            ?? throw new InvalidOperationException("SuperAdmin role is unavailable.");
+        var user = new User { Name = "Administrator", Surname = "", Email = email, UserName = email, RoleId = role.Id };
+        CheckResult(await users.CreateAsync(user, password), "BootstrapAdmin creation failed; check the email and password policy.");
+        CheckResult(await users.AddToRoleAsync(user, RolesConstants.SuperAdminRole), "BootstrapAdmin role assignment failed.");
+        await transaction.CommitAsync();
+    }
+
+    private static void CheckResult(IdentityResult result, string message)
+    {
+        // Validators can include submitted values in error descriptions; do not log them.
+        if (!result.Succeeded) throw new InvalidOperationException(message);
     }
 }

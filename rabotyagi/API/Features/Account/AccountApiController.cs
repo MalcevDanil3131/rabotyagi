@@ -1,5 +1,6 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using rabotyagi.API.Features.Account.DTOs;
 
 namespace rabotyagi.API.Features.Account;
@@ -10,6 +11,7 @@ public class AccountApiController(AccountService accountService) : ControllerBas
 {
     /// <summary> Регистрирует пользователя </summary>
     [HttpPost("register")]
+    [EnableRateLimiting("register"), RequestSizeLimit(16 * 1024)]
     [AllowAnonymous]
     [ProducesResponseType(200)]
     [ProducesResponseType(400)]
@@ -18,6 +20,7 @@ public class AccountApiController(AccountService accountService) : ControllerBas
     
     /// <summary> Логинит пользователя </summary>
     [HttpPost("login")]
+    [EnableRateLimiting("login"), RequestSizeLimit(8 * 1024)]
     [AllowAnonymous]
     [ProducesResponseType(200)]
     [ProducesResponseType(400)]
@@ -41,6 +44,7 @@ public class AccountApiController(AccountService accountService) : ControllerBas
 
     /// <summary> Изменяет пароль пользователя </summary>
     [HttpPatch("password")]
+    [EnableRateLimiting("password"), RequestSizeLimit(8 * 1024)]
     [Authorize]
     [ProducesResponseType(200)]
     [ProducesResponseType(404)]

@@ -710,6 +710,23 @@ small {
   display: block;
   min-width: 0;
 }
+.order-price-line {
+  display: block;
+  margin-top: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: normal;
+}
+.pagination {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 18px;
+  font-size: 13px;
+}
 .order-copy > strong {
   display: block;
   font-size: 11px;
@@ -2780,3 +2797,23 @@ body {
 .live-filter select {
   width: auto;
 }
+
+.demo-banner { padding: 12px 28px; background: #fff4cf; color: #27332d; border-bottom: 1px solid #dfcf9c; }
+.demo-toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.demo-toolbar > .button.secondary { background: #27332d; color: #fff; }
+.demo-toolbar > .text-button { color: #27332d; }
+.demo-label { font-weight: 700; font-size: 13px; }
+.demo-login { margin-bottom: 24px; padding-bottom: 20px; border-bottom: 1px solid #dce3dd; }
+.demo-choices { display: grid; gap: 14px; }
+.demo-account-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.demo-account-grid .button { white-space: normal; justify-content: center; }
+.admin-queues { margin-bottom: 28px; }
+.admin-queues-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.admin-queue-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.admin-queue { display: flex; flex-direction: column; align-items: flex-start; text-align: left; gap: 8px; padding: 18px; border: 1px solid #d9e2db; border-radius: 12px; background: #fff; color: #24362d; cursor: pointer; }
+.admin-queue.selected { border-color: #52785e; background: #edf4e9; box-shadow: inset 0 0 0 1px #52785e; }
+.admin-queue strong { font-size: 30px; }
+.admin-queue small { color: #5c6c62; }
+.admin-queue:hover { border-color: #52785e; }
+@media (max-width: 900px) { .admin-queue-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 480px) { .demo-banner { padding: 12px 16px; } .demo-account-grid { grid-template-columns: 1fr; } .admin-queue { padding: 12px; } }

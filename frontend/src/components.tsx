@@ -144,6 +144,7 @@ export function OrdersTable({
                   </span>
                   <strong>{order.title}</strong>
                   <span className="muted address-line">{order.address}</span>
+                  {order.priceSummary && <span className="order-price-line">{order.priceSummary}</span>}
                 </span>
               </span>
               <span className="order-worker">
@@ -188,6 +189,7 @@ export function SearchField({
       <Search size={18} />
       <input
         aria-label="Поиск по заявкам"
+        maxLength={200}
         placeholder="Номер, адрес или услуга"
         value={value}
         onChange={(e) => onChange(e.target.value)}

@@ -7,5 +7,11 @@ public enum EOrderHistoryEventType
     ExecutorAssigned,
     ReportSubmitted,
     ReportApproved,
-    ReportReturned
+    ReportReturned,
+    ExecutorChanged,
+    PriceProposed,
+    PriceAccepted,
+    PriceRejected,
+    WorkAcceptedByClient,
+    WorkReturnedByClient
 }

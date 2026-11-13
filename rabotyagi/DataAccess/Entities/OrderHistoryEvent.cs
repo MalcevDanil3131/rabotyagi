@@ -15,6 +15,9 @@ public class OrderHistoryEvent
     public EOrderStatus? PreviousStatus { get; set; }
     public EOrderStatus NewStatus { get; set; }
     public Guid? ExecutorId { get; set; }
+    public Guid? PreviousExecutorId { get; set; }
+    public string? PreviousExecutorNameSnapshot { get; set; }
     public string? ExecutorNameSnapshot { get; set; }
     public string? Comment { get; set; }
+    public decimal? PriceAmount { get; set; }
 }
