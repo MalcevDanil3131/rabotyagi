@@ -5,8 +5,29 @@ using System.Text.Json;
 using Npgsql;
 
 var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../"));
-var config = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "rabotyagi/appsettings.json")));
-var connection = new NpgsqlConnectionStringBuilder(config.RootElement.GetProperty("ConnectionStrings").GetProperty("DefaultConnection").GetString()) { Host = "localhost", Database = "postgres", Pooling = false };
+var checks = 0;
+DemoChecks.RunGuards(Check);
+if (args.Contains("--demo-guards-only"))
+{
+    Console.WriteLine($"PASS: {checks} demo isolation checks without database access.");
+    return;
+}
+var testConnection = Environment.GetEnvironmentVariable("WORKFLOW_CHECKS_CONNECTION")
+    ?? throw new InvalidOperationException("Set WORKFLOW_CHECKS_CONNECTION to a dedicated test PostgreSQL server; application configuration is never used.");
+if (args.Contains("--backup-only"))
+{
+    await BackupChecks.Run(testConnection, root, Check);
+    Console.WriteLine($"PASS: {checks} database backup checks against isolated PostgreSQL databases.");
+    return;
+}
+if (args.Contains("--security-only"))
+{
+    await SecurityChecks.Run(testConnection, root, Check);
+    Console.WriteLine($"PASS: {checks} security checks against isolated PostgreSQL database.");
+    return;
+}
+var connection = new NpgsqlConnectionStringBuilder(testConnection) { Database = "postgres", Pooling = false };
+var testPassword = Environment.GetEnvironmentVariable("WORKFLOW_CHECKS_PASSWORD") ?? "Aa1!" + Guid.NewGuid().ToString("N");
 var database = "rabotyagi_checks_" + Guid.NewGuid().ToString("N");
 var uploads = Path.Combine(Path.GetTempPath(), database);
 await using var adminDb = new NpgsqlConnection(connection.ConnectionString);
@@ -14,16 +35,29 @@ await adminDb.OpenAsync();
 await new NpgsqlCommand($"CREATE DATABASE \"{database}\"", adminDb).ExecuteNonQueryAsync();
 Process? server = null;
 var output = new List<string>();
-var checks = 0;
 try
 {
     connection.Database = database;
+    await BootstrapChecks.Run(connection.ConnectionString, testPassword, Check);
     var start = new ProcessStartInfo("dotnet", Path.Combine(root, "rabotyagi/bin/Debug/net10.0/rabotyagi.dll")) { WorkingDirectory = Path.Combine(root, "rabotyagi"), UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true };
     start.Environment["ASPNETCORE_ENVIRONMENT"] = "Production";
+    start.Environment["DOTNET_ENVIRONMENT"] = "Production";
+    start.Environment["Demo__Enabled"] = "false";
     start.Environment["ASPNETCORE_URLS"] = "http://127.0.0.1:5188";
+    start.Environment["ConnectionStrings__DefaultConnection"] = "";
     start.Environment["ConnectionStrings__ProductionConnection"] = connection.ConnectionString;
     start.Environment["Uploads__Path"] = uploads;
+    var testKeys = Path.Combine(uploads, "keys");
+    Directory.CreateDirectory(testKeys);
+    start.Environment["DataProtection__Path"] = testKeys;
     start.Environment["Logging__EventLog__LogLevel__Default"] = "None";
+    start.Environment["BootstrapAdmin__Enabled"] = "false";
+    start.Environment["BootstrapAdmin__Email"] = "";
+    start.Environment["BootstrapAdmin__Password"] = "";
+    // Workflow traffic exceeds interactive limits; real limits are checked by SecurityChecks.
+    start.Environment["RequestSecurity__RequireHttpsCookies"] = "false";
+    start.Environment["RequestSecurity__ReadPermitLimit"] = "10000";
+    start.Environment["RequestSecurity__WritePermitLimit"] = "10000";
     server = Process.Start(start)!;
     server.OutputDataReceived += (_, e) => { if (e.Data != null) lock (output) output.Add(e.Data); };
     server.ErrorDataReceived += (_, e) => { if (e.Data != null) lock (output) output.Add(e.Data); };
@@ -56,12 +90,13 @@ try
     using var outsider = Client();
     await Status(admin, "account/login", HttpStatusCode.OK, new
     {
-        email = "superadmin@mail.ru",
-        password = "Wertukan!234",
+        email = "bootstrap@checks.local",
+        password = testPassword,
         isPersistent = false
     });
     var adminInfo = await Json(admin, "account");
     var adminId = adminInfo.GetProperty("id").GetGuid();
+    Check((await Json(admin, "user")).GetArrayLength() == 2, "Production startup creates no demo accounts");
     Check(adminInfo.GetProperty("roles").EnumerateArray().Any(x => x.GetString() == "SuperAdmin"), "account contains Identity role");
     async Task<Guid> Register(HttpClient c, string email)
     {
@@ -71,7 +106,7 @@ try
             surname = email,
             phoneNumber = "+70000000000",
             email = email + "@checks.local",
-            password = "Check123!",
+            password = testPassword,
             isPersistent = false
         });
         return (await Json(c, "account")).GetProperty("id").GetGuid();
@@ -98,7 +133,7 @@ try
         await Status(c, "account/login", HttpStatusCode.OK, new
         {
             email = email + "@checks.local",
-            password = "Check123!",
+            password = testPassword,
             isPersistent = false
         });
     await Status(client, "address", HttpStatusCode.OK, new
@@ -214,13 +249,15 @@ try
         orderId = id,
         status = "inProgress"
     }, "PATCH");
+    await Status(winner, "order/status", HttpStatusCode.Conflict, new { orderId = id, status = "inProgress" }, "PATCH");
+    await PriceChecks.Agree(winner, client, id, Check);
     await Status(winner, "order/status", HttpStatusCode.OK, new
     {
         orderId = id,
         status = "inProgress"
     }, "PATCH");
     await RejectLateCancellation("inProgress");
-    await Status(admin, "order/status", HttpStatusCode.Conflict, new
+    await Status(admin, "order/status", HttpStatusCode.Forbidden, new
     {
         orderId = id,
         status = "completed"
@@ -244,18 +281,17 @@ try
     var photo = order.GetProperty("photos")[0].GetProperty("id").GetGuid();
     await Status(client, $"order/{id}/photos/{photo}", HttpStatusCode.OK, null, "GET");
     await Status(outsider, $"order/{id}/photos/{photo}", HttpStatusCode.NotFound, null, "GET");
-    await Status(client, $"order/{id}/review", HttpStatusCode.Forbidden, new
+    await Status(dispatcher, $"order/{id}/review", HttpStatusCode.Forbidden, new
     {
-        approved = true
+        approved = true, expectedUpdated = order.GetProperty("updated").GetString()
     });
-    await Status(dispatcher, $"order/{id}/review", HttpStatusCode.BadRequest, new
+    await Status(client, $"order/{id}/review", HttpStatusCode.BadRequest, new
     {
-        approved = false
+        approved = false, expectedUpdated = order.GetProperty("updated").GetString()
     });
-    await Status(dispatcher, $"order/{id}/review", HttpStatusCode.OK, new
+    await Status(client, $"order/{id}/review", HttpStatusCode.OK, new
     {
-        approved = false,
-        feedback = "Нужен другой ракурс"
+        approved = false, feedback = "Нужен другой ракурс", expectedUpdated = order.GetProperty("updated").GetString()
     });
     await RejectLateCancellation("rework");
     await Report(true);
@@ -264,25 +300,24 @@ try
         text = "Работу закончил"
     });
     Check((await Json(dispatcher, $"order/{id}/messages")).GetArrayLength() == 1, "order discussion is shared with dispatcher");
-    await Status(dispatcher, $"order/{id}/review", HttpStatusCode.OK, new
+    order = await Json(client, $"order/{id}");
+    await Status(client, $"order/{id}/review", HttpStatusCode.OK, new
     {
-        approved = true
+        approved = true, expectedUpdated = order.GetProperty("updated").GetString()
     });
-    await Status(dispatcher, "order/status", HttpStatusCode.Forbidden, new
+    await Status(admin, "order/status", HttpStatusCode.Forbidden, new
     {
-        orderId = id,
-        status = "completed"
-    }, "PATCH");
-    await RejectLateCancellation("approved");
-    await Status(admin, "order/status", HttpStatusCode.OK, new
-    {
-        orderId = id,
-        status = "completed"
+        orderId = id, status = "completed"
     }, "PATCH");
     Check((await Json(client, $"order/{id}")).GetProperty("status").GetString() == "completed", "full workflow persists completed status");
     await RejectLateCancellation("completed");
+    await OrderRepairChecks.Run(connection.ConnectionString, id, winner == worker1 ? w1 : w2, winner, uploads, Check);
     await HistoryChecks.Run(connection.ConnectionString, id, winner == worker1 ? w1 : w2,
         client, admin, dispatcher, winner, loser, outsider, anonymous, Check);
+    await ReassignmentChecks.Run(connection.ConnectionString, id, w1, w2,
+        client, admin, dispatcher, worker1, worker2, anonymous, Check);
+    await PriceChecks.Run(connection.ConnectionString, id, w1, worker1, client, admin, dispatcher, worker2, outsider, anonymous, Check);
+    await ClientAcceptanceChecks.Run(connection.ConnectionString, id, client, admin, dispatcher, winner, outsider, anonymous, Check);
     var historyBeforeRestart = (await Json(client, $"order/{id}/history")).GetRawText();
     server!.Kill(true);
     await server.WaitForExitAsync();
@@ -313,7 +348,7 @@ try
     await Status(worker1, "account/login", HttpStatusCode.BadRequest, new
     {
         email = "worker1@checks.local",
-        password = "Check123!",
+        password = testPassword,
         isPersistent = false
     });
     await Status(admin, $"user/{w1}/blocked", HttpStatusCode.OK, new
@@ -323,10 +358,18 @@ try
     await Status(client, "account/password", HttpStatusCode.BadRequest, new
     {
         oldPassword = "bad",
-        newPassword = "Changed123!"
+        newPassword = "Aa1!" + Guid.NewGuid().ToString("N")
     }, "PATCH");
     await Status(client, "account/logout", HttpStatusCode.OK);
     await Status(client, "account", HttpStatusCode.Unauthorized, null, "GET");
+    using (var demoRequest = new HttpRequestMessage(HttpMethod.Get, "demo/accounts"))
+    {
+        demoRequest.Headers.Add("X-Rabotyagi-Demo", "1");
+        using var demoResponse = await anonymous.SendAsync(demoRequest);
+        Check(demoResponse.StatusCode == HttpStatusCode.NotFound, "Production does not expose demo accounts");
+    }
+    await DemoIntegrationChecks.Run(testConnection, root, Check);
+    await SecurityChecks.Run(testConnection, root, Check);
     Console.WriteLine($"PASS: {checks} checks against isolated PostgreSQL database.");
     if (args.Contains("--serve"))
     {

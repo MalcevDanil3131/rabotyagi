@@ -33,6 +33,9 @@ public class AppDbContext : IdentityDbContext<User, IdentityRole<Guid>, Guid>
         base.OnModelCreating(modelBuilder);
         modelBuilder.Entity<Order>().Property(x => x.Updated).IsConcurrencyToken();
         modelBuilder.Entity<Order>().HasIndex(x => x.Status);
+        modelBuilder.Entity<Order>().Property(x => x.PriceAmount).HasPrecision(12, 2);
+        modelBuilder.Entity<Order>().Property(x => x.PriceScope).HasMaxLength(2000);
+        modelBuilder.Entity<OrderHistoryEvent>().Property(x => x.PriceAmount).HasPrecision(12, 2);
         modelBuilder.Entity<OrderMessage>().HasIndex(x => new { x.OrderId, x.Created });
         modelBuilder.Entity<OrderHistoryEvent>().HasIndex(x => new { x.OrderId, x.OccurredAt, x.Id });
         modelBuilder.Entity<OrderHistoryEvent>().HasOne(x => x.Order).WithMany()

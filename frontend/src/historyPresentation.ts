@@ -1,4 +1,5 @@
 import type { ApiHistoryEvent, ApiStatus } from './api';
+import { formatPrice } from './pricePresentation.ts';
 
 const labels: Record<ApiStatus, string> = {
   created: 'На модерации', published: 'Доступна', workerOnTheWay: 'В пути',
@@ -11,8 +12,14 @@ export function describeHistoryEvent(event: ApiHistoryEvent): string {
     case 'created': return 'Создана заявка';
     case 'statusChanged': return `Изменён статус: ${event.previousStatus ? labels[event.previousStatus] || event.previousStatus : '—'} → ${labels[event.newStatus] || event.newStatus}`;
     case 'executorAssigned': return `Назначен исполнитель: ${event.executorNameSnapshot || 'Пользователь удалён'}`;
+    case 'executorChanged': return `Заменён исполнитель: ${event.previousExecutorNameSnapshot || 'Пользователь удалён'} → ${event.executorNameSnapshot || 'Пользователь удалён'}. Заявка возвращена в статус «В пути»`;
+    case 'priceProposed': return `Исполнитель предложил стоимость: ${formatPrice(event.priceAmount)}`;
+    case 'priceAccepted': return `Клиент согласовал стоимость: ${formatPrice(event.priceAmount)}`;
+    case 'priceRejected': return `Клиент отклонил стоимость: ${formatPrice(event.priceAmount)}`;
     case 'reportSubmitted': return 'Отправлен фотоотчёт';
     case 'reportApproved': return 'Фотоотчёт принят диспетчером';
+    case 'workAcceptedByClient': return 'Клиент принял работу. Заявка завершена';
+    case 'workReturnedByClient': return 'Клиент вернул работу на доработку';
     case 'reportReturned': return 'Фотоотчёт возвращён на доработку';
     default: return 'Действие с заявкой';
   }

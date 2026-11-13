@@ -26,5 +26,10 @@ public class OrderDto
     public DateTimeOffset? ReportSubmittedAt { get; set; }
     public string? ReviewFeedback { get; set; }
     public DateTimeOffset? ReviewedAt { get; set; }
+    public decimal? PriceAmount { get; set; }
+    public string? PriceScope { get; set; }
+    public EOrderPriceStatus PriceStatus { get; set; }
+    public Guid? PriceExecutorId { get; set; }
+    public DateTimeOffset? PriceAcceptedAt { get; set; }
     public List<OrderPhotoDto> Photos { get; set; } = [];
 }

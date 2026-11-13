@@ -23,9 +23,9 @@ export const statuses: Record<Status, string> = {
   published: 'Доступна',
   onTheWay: 'В пути',
   inProgress: 'В работе',
-  report: 'Проверка отчёта',
+  report: 'Приёмка клиентом',
   rework: 'На доработке',
-  approved: 'Ожидает закрытия',
+  approved: 'Ожидает клиента',
   completed: 'Закрыта',
   cancelled: 'Отменена',
 };
@@ -58,6 +58,7 @@ export interface Order {
   comment: string;
   scheduledAt: string | null;
   createdAt: string;
+  priceSummary?: string;
   workerId?: string;
   report?: Report;
   events: Event[];

@@ -1,7 +1,7 @@
-﻿namespace rabotyagi.API.Features.Account.DTOs;
-
+using System.ComponentModel.DataAnnotations;
+namespace rabotyagi.API.Features.Account.DTOs;
 public class ChangePasswordDto
 {
-    public string OldPassword { get; set; }
-    public string NewPassword { get; set; }
+    [Required, StringLength(1024)] public string OldPassword { get; set; } = "";
+    [Required, StringLength(128, MinimumLength = 10)] public string NewPassword { get; set; } = "";
 }

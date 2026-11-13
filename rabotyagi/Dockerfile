@@ -19,7 +19,7 @@ RUN dotnet publish "./rabotyagi.csproj" -c $BUILD_CONFIGURATION -o /app/publish 
 
 FROM base AS final
 USER root
-RUN mkdir -p /app/uploads /app/keys && chown -R $APP_UID:$APP_UID /app/uploads /app/keys
+RUN mkdir -p /app/uploads /app/keys /app/.demo && chown -R $APP_UID:$APP_UID /app/uploads /app/keys /app/.demo
 USER $APP_UID
 WORKDIR /app
 COPY --from=publish /app/publish .

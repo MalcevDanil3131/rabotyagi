@@ -24,13 +24,17 @@ internal static class HistoryChecks
             response.EnsureSuccessStatusCode();
             return JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement.Clone();
         }
-        var history = await History(client, orderId);
+        var fullHistory = await History(client, orderId);
+        check(fullHistory.EnumerateArray().Count(x => x.GetProperty("eventType").GetString() is "priceProposed" or "priceAccepted") == 2,
+            "workflow records proposal and client acceptance");
+        var history = JsonSerializer.SerializeToElement(fullHistory.EnumerateArray()
+            .Where(x => x.GetProperty("eventType").GetString() is not ("priceProposed" or "priceAccepted")).ToArray());
         string[] types = ["created", "statusChanged", "executorAssigned", "statusChanged", "reportSubmitted",
-            "reportReturned", "reportSubmitted", "reportApproved", "statusChanged"];
+            "workReturnedByClient", "reportSubmitted", "workAcceptedByClient"];
         check(history.EnumerateArray().Select(x => x.GetProperty("eventType").GetString()).SequenceEqual(types),
             "workflow history contains exactly the successful actions, including one concurrent assignment");
-        string?[] previous = [null, "created", "published", "workerOnTheWay", "inProgress", "workFinished", "rework", "workFinished", "approved"];
-        string[] next = ["created", "published", "workerOnTheWay", "inProgress", "workFinished", "rework", "workFinished", "approved", "completed"];
+        string?[] previous = [null, "created", "published", "workerOnTheWay", "inProgress", "workFinished", "rework", "workFinished"];
+        string[] next = ["created", "published", "workerOnTheWay", "inProgress", "workFinished", "rework", "workFinished", "completed"];
         DateTimeOffset? last = null;
         for (var i = 0; i < history.GetArrayLength(); i++)
         {
@@ -44,7 +48,7 @@ internal static class HistoryChecks
         check(history[2].GetProperty("executorId").GetGuid() == workerId, "assignment records the winning executor");
         check(history[5].GetProperty("comment").GetString() == "Нужен другой ракурс", "old feedback survives report resubmission and approval");
         foreach (var actor in new[] { admin, dispatcher, winner })
-            check((await History(actor, orderId)).GetArrayLength() == types.Length, "authorized role can read history");
+            check((await History(actor, orderId)).GetArrayLength() == fullHistory.GetArrayLength(), "authorized role can read history");
         foreach (var actor in new[] { loser, outsider })
         {
             using var response = await actor.GetAsync($"order/{orderId}/history");
@@ -95,7 +99,8 @@ internal static class HistoryChecks
                 "report and photo records roll back if history fails");
             await db.Orders.Where(x => x.Id == legacy.Id).ExecuteUpdateAsync(s => s
                 .SetProperty(x => x.Status, EOrderStatus.WorkFinished).SetProperty(x => x.ReportSubmittedAt, DateTimeOffset.UtcNow));
-            using var review = await dispatcher.PostAsJsonAsync($"order/{legacy.Id}/review", new { approved = true });
+            using var review = await client.PostAsJsonAsync($"order/{legacy.Id}/review", new { approved = true,
+                expectedUpdated = (await db.Orders.AsNoTracking().SingleAsync(x => x.Id == legacy.Id)).Updated });
             unchanged = await db.Orders.AsNoTracking().SingleAsync(x => x.Id == legacy.Id);
             check(review.StatusCode == HttpStatusCode.InternalServerError && unchanged.Status == EOrderStatus.WorkFinished
                 && unchanged.ReviewedAt == null, "review rolls back if history fails");

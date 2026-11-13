@@ -2,9 +2,11 @@ import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import { ArrowRight, UserRound } from 'lucide-react';
 import { api, ApiError } from './api';
-import type { Account, Address } from './api';
+import type { Account, Address, DemoAccount } from './api';
+import { DemoSwitcher } from './DemoSwitcher';
 import { Dialog } from './components';
 import ConnectedDashboard from './ConnectedDashboard';
+import { useRequestCooldown } from './useRequestCooldown';
 
 export default function LiveWorkspace() {
   const [account, setAccount] = useState<Account | null>(null);
@@ -12,6 +14,28 @@ export default function LiveWorkspace() {
   const [error, setError] = useState('');
   const [auth, setAuth] = useState<'login' | 'register'>('login');
   const [busy, setBusy] = useState(false);
+  const [demoAccounts, setDemoAccounts] = useState<DemoAccount[]>([]);
+  const [switching, setSwitching] = useState(false);
+  const [demoError, setDemoError] = useState('');
+  const loginCooldown = useRequestCooldown();
+  const demoCooldown = useRequestCooldown();
+  useEffect(() => {
+    let active = true;
+    void api.demoAccounts().then((items) => { if (active) setDemoAccounts(items); }).catch(() => {});
+    return () => { active = false; };
+  }, []);
+  async function switchDemo(key: string) {
+    if (demoCooldown.seconds > 0) return;
+    setSwitching(true);
+    setDemoError('');
+    setAccount(null); // Unmount all previous account state before changing the cookie.
+    try { await api.demoLogin(key); setAccount(await api.account()); }
+    catch (err) {
+      demoCooldown.hold(err);
+      setDemoError(err instanceof Error ? err.message : 'Не удалось сменить аккаунт.');
+      try { setAccount(await api.account()); } catch { setAccount(null); }
+    } finally { setSwitching(false); }
+  }
   useEffect(() => {
     let active = true;
     api
@@ -31,6 +55,7 @@ export default function LiveWorkspace() {
   }, []);
   async function authenticate(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    if (loginCooldown.seconds > 0 || busy) return;
     const form = new FormData(e.currentTarget);
     setBusy(true);
     setError('');
@@ -50,6 +75,7 @@ export default function LiveWorkspace() {
       else await api.login(credentials.email, credentials.password, credentials.isPersistent);
       setAccount(await api.account());
     } catch (err) {
+      loginCooldown.hold(err);
       setError(err instanceof Error ? err.message : 'Не удалось войти.');
     } finally {
       setBusy(false);
@@ -59,13 +85,18 @@ export default function LiveWorkspace() {
     await api.logout();
     setAccount(null);
   }
+  if (switching) return <main className="loading" role="status">Переключаем демо-аккаунт…</main>;
+  const demoPanel = demoAccounts.length ? <DemoSwitcher accounts={demoAccounts} account={account} busy={busy || loading || demoCooldown.seconds > 0}
+    error={demoCooldown.seconds > 0 ? `Переключение будет доступно через ${demoCooldown.seconds} сек.` : demoError} onSwitch={switchDemo} /> : undefined;
   if (account)
     return (
       <ConnectedDashboard
+        key={account.id}
+        demoPanel={demoPanel}
         account={account}
-        onAccount={setAccount}
+        onAccount={(updated) => setAccount((current) => current?.id === updated.id ? updated : current)}
         onLogout={logout}
-        onExpired={() => setAccount(null)}
+        onExpired={() => setAccount((current) => current?.id === account.id ? null : current)}
       />
     );
   return (
@@ -100,6 +131,7 @@ export default function LiveWorkspace() {
           </div>
         </div>
         <section className="auth-card">
+          {demoPanel}
           <h2>{auth === 'login' ? 'С возвращением' : 'Создать аккаунт'}</h2>
           <p className="muted">
             {auth === 'login'
@@ -141,13 +173,14 @@ export default function LiveWorkspace() {
                 name="password"
                 type="password"
                 autoComplete={auth === 'login' ? 'current-password' : 'new-password'}
-                minLength={auth === 'register' ? 6 : undefined}
+                minLength={auth === 'register' ? 10 : undefined}
+                maxLength={auth === 'register' ? 128 : 1024}
                 required
               />
             </label>
             {auth === 'register' && (
               <small className="muted">
-                Добавьте заглавную и строчную буквы, цифру и спецсимвол.
+                От 10 до 128 символов: заглавная и строчная буквы, цифра и спецсимвол.
               </small>
             )}
             <label className="checkbox-label">
@@ -159,8 +192,8 @@ export default function LiveWorkspace() {
                 {error}
               </p>
             )}
-            <button className="button primary full" disabled={busy || loading}>
-              {busy || loading
+            <button className="button primary full" disabled={busy || loading || loginCooldown.seconds > 0}>
+              {loginCooldown.seconds > 0 ? `Повторить через ${loginCooldown.seconds} сек.` : busy || loading
                 ? 'Подключаемся…'
                 : auth === 'login'
                   ? 'Войти'
@@ -280,12 +313,14 @@ export function PasswordForm({
 }) {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const cooldown = useRequestCooldown();
   return (
     <Dialog title="Изменить пароль" onClose={onClose}>
       <form
         className="dialog-body form"
         onSubmit={async (e) => {
           e.preventDefault();
+          if (cooldown.seconds > 0 || busy) return;
           const data = new FormData(e.currentTarget);
           setBusy(true);
           setError('');
@@ -294,6 +329,7 @@ export function PasswordForm({
               throw new Error('Новые пароли не совпадают.');
             await onSave(String(data.get('old')), String(data.get('new')));
           } catch (err) {
+            cooldown.hold(err);
             setError(err instanceof Error ? err.message : 'Не удалось изменить пароль.');
           } finally {
             setBusy(false);
@@ -306,7 +342,7 @@ export function PasswordForm({
         </label>
         <label>
           Новый пароль
-          <input name="new" type="password" autoComplete="new-password" required minLength={6} />
+          <input name="new" type="password" autoComplete="new-password" required minLength={10} maxLength={128} />
         </label>
         <label>
           Повторите новый пароль
@@ -315,7 +351,8 @@ export function PasswordForm({
             type="password"
             autoComplete="new-password"
             required
-            minLength={6}
+            minLength={10}
+            maxLength={128}
           />
         </label>
         {error && (
@@ -323,8 +360,9 @@ export function PasswordForm({
             {error}
           </p>
         )}
-        <button className="button primary" disabled={busy}>
-          {busy ? 'Сохраняем…' : 'Изменить пароль'}
+        <small className="muted">От 10 до 128 символов: заглавная и строчная буквы, цифра и спецсимвол.</small>
+        <button className="button primary" disabled={busy || cooldown.seconds > 0}>
+          {cooldown.seconds > 0 ? `Повторить через ${cooldown.seconds} сек.` : busy ? 'Сохраняем…' : 'Изменить пароль'}
         </button>
       </form>
     </Dialog>

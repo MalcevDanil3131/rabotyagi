@@ -233,6 +233,24 @@ namespace rabotyagi.DataAccess.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<DateTimeOffset?>("PriceAcceptedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<decimal?>("PriceAmount")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("numeric(12,2)");
+
+                    b.Property<Guid?>("PriceExecutorId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("PriceScope")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)");
+
+                    b.Property<string>("PriceStatus")
+                        .IsRequired()
+                        .HasColumnType("text");
+
                     b.Property<DateTimeOffset?>("ReportSubmittedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -318,8 +336,18 @@ namespace rabotyagi.DataAccess.Migrations
                     b.Property<Guid>("OrderId")
                         .HasColumnType("uuid");
 
+                    b.Property<Guid?>("PreviousExecutorId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("PreviousExecutorNameSnapshot")
+                        .HasColumnType("text");
+
                     b.Property<string>("PreviousStatus")
                         .HasColumnType("text");
+
+                    b.Property<decimal?>("PriceAmount")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("numeric(12,2)");
 
                     b.HasKey("Id");
 

@@ -35,6 +35,9 @@
       ConnectionStrings__ProductionConnection: "Host=postgres;Port=5432;Database=rabotyagi_db;Username=${POSTGRES_USER:-admin};Password=${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}"
       Uploads__Path: /app/uploads
       DataProtection__Path: /app/keys
+      BootstrapAdmin__Enabled: ${BOOTSTRAP_ADMIN_ENABLED:-false}
+      BootstrapAdmin__Email: ${BOOTSTRAP_ADMIN_EMAIL:-}
+      BootstrapAdmin__Password: ${BOOTSTRAP_ADMIN_PASSWORD:-}
     volumes:
       - report_photos:/app/uploads
       - identity_keys:/app/keys

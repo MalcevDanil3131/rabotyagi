@@ -1,4 +1,8 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { createOrderListLoader } from './orderListLoader';
+import { refreshOrderView } from './refreshOrderView';
+import type { ReactNode } from 'react';
+import { adminQueues } from './adminQueues';
 import {
   ClipboardList,
   UsersRound,
@@ -16,10 +20,14 @@ import {
   UserRound,
 } from 'lucide-react';
 import { api, ApiError, photoUrl } from './api';
-import type { Account, Address, ApiOrder, ApiWorker, ApiUser, ApiMessage, ApiStatus } from './api';
+import type { Account, Address, ApiOrder, ApiWorker, ApiUser, ApiMessage, ApiStatus, OrderListQuery } from './api';
 import { Avatar, Badge, Dialog, Empty, OrdersTable, SearchField } from './components';
 import { CreateOrder, ReportForm } from './OrderDialogs';
 import { OrderHistory } from './OrderHistory';
+import { ReassignExecutorForm } from './ReassignExecutorForm';
+import { OrderPrice } from './OrderPrice';
+import { canReviewWork } from './reportAcceptance';
+import { priceAgreed, priceSummary } from './pricePresentation';
 import { AddressForm, PasswordForm } from './LiveWorkspace';
 import { categories, formatDate, formatTime, statuses } from './domain';
 import type { Order, Worker, Status, Report, Photo } from './domain';
@@ -55,6 +63,7 @@ function toOrder(o: ApiOrder): Order {
     comment: o.comment,
     scheduledAt: o.scheduledAt,
     createdAt: o.created,
+    priceSummary: priceSummary(o),
     workerId: o.executorId || undefined,
     events: [],
     report: o.reportSubmittedAt
@@ -107,23 +116,32 @@ export default function ConnectedDashboard({
   onAccount,
   onLogout,
   onExpired,
+  demoPanel,
 }: {
   account: Account;
   onAccount: (a: Account) => void;
   onLogout: () => Promise<void>;
   onExpired: () => void;
+  demoPanel?: ReactNode;
 }) {
   const [view, setView] = useState<View>('orders');
-  const [orders, setOrders] = useState<ApiOrder[]>([]);
   const [workers, setWorkers] = useState<ApiWorker[]>([]);
-  const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
-  const [more, setMore] = useState(false);
+  const [queue, setQueue] = useState<ApiStatus | undefined>();
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [detail, setDetail] = useState<ApiOrder | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState('');
+  const detailVersion = useRef(0);
+  const auxiliaryVersion = useRef(0);
+  const mutationInFlight = useRef(false);
+  const latestRefresh = useRef<(background?: boolean, afterMutation?: boolean) => Promise<void>>(async () => {});
+  const [workersError, setWorkersError] = useState('');
   const [selected, setSelected] = useState<string | null>(null);
   const [reportId, setReportId] = useState<string | null>(null);
   const [modal, setModal] = useState<'create' | 'address' | 'password' | 'slot' | null>(null);
@@ -149,92 +167,108 @@ export default function ConnectedDashboard({
     },
     [onExpired],
   );
-  const refresh = useCallback(
-    async (silent = false) => {
-      if (!silent) setLoading(true);
-      try {
-        const [o, w] = await Promise.all([
-          api.orders(),
-          worker || staff ? api.workers() : Promise.resolve([]),
-        ]);
-        setOrders(o);
-        setWorkers(w);
-        setPage(1);
-        setMore(o.length === 100);
-        if (!silent) setError('');
-      } catch (err) {
-        fail(err);
-      } finally {
-        if (!silent) setLoading(false);
-      }
-    },
-    [worker, staff, fail],
-  );
+  const loader = useMemo(() => createOrderListLoader(api.orderPage), [account.id, account.roleName, roles.join(',')]);
+  const list = useSyncExternalStore(loader.subscribe, loader.getSnapshot);
+  const orders = list.data?.items ?? [];
+  const loading = list.loading;
+  const queueCounts = list.data?.statusCounts ?? [];
+  const stats = list.data?.stats;
+  const query: OrderListQuery = useMemo(() => ({ page, pageSize: 20,
+    scope: (['mine', 'active', 'review'].includes(filter) ? filter : 'all') as OrderListQuery['scope'],
+    status: queue ?? (filter in statusMap ? filter as ApiStatus : undefined),
+    search: debouncedSearch.trim(), quality: view === 'quality',
+  }), [page, filter, queue, debouncedSearch, view]);
   useEffect(() => {
-    void refresh();
-  }, [account.id, worker, staff]);
+    if (search === debouncedSearch) return;
+    const timer = window.setTimeout(() => { setDebouncedSearch(search); setPage(1); }, 300);
+    return () => clearTimeout(timer);
+  }, [search]);
+  useEffect(() => {
+    let active = true;
+    void loader.load(query).then((ok) => {
+      const current = loader.getSnapshot().data;
+      if (active && ok && current && current.page !== query.page) setPage(current.page);
+    });
+    return () => { active = false; };
+  }, [loader, query]);
+  useEffect(() => () => loader.cancel(), [loader]);
+  useEffect(() => {
+    if (list.error instanceof ApiError && list.error.status === 401) onExpired();
+  }, [list.error, onExpired]);
+  useEffect(() => { setPage(1); }, [filter, queue, view]);
+  const loadWorkers = useCallback(async () => {
+    const version = ++auxiliaryVersion.current;
+    if (!worker && !staff) { setWorkers([]); return; }
+    try {
+      const rows = await api.workers();
+      if (version === auxiliaryVersion.current) { setWorkers(rows); setWorkersError(''); }
+    } catch (err) {
+      if (version !== auxiliaryVersion.current) return;
+      if (err instanceof ApiError && err.status === 401) onExpired();
+      setWorkersError('Не удалось обновить специалистов. Список заявок доступен отдельно.');
+    }
+  }, [worker, staff, onExpired]);
+  useEffect(() => { void loadWorkers(); return () => { auxiliaryVersion.current++; }; }, [account.id, worker, staff]);
+  const loadDetail = useCallback(async () => {
+    const version = ++detailVersion.current;
+    if (!selected) { setDetail(null); setDetailError(''); return; }
+    setDetailLoading(true);
+    try {
+      const row = await api.order(selected);
+      if (version === detailVersion.current) { setDetail(row); setDetailError(''); }
+    } catch (err) {
+      if (version !== detailVersion.current) return;
+      if (err instanceof ApiError && err.status === 401) onExpired();
+      if (err instanceof ApiError && (err.status === 404 || err.status === 403)) setDetail(null);
+      setDetailError(err instanceof Error ? err.message : 'Не удалось обновить карточку.');
+    } finally { if (version === detailVersion.current) setDetailLoading(false); }
+  }, [selected, onExpired]);
+  useEffect(() => {
+    setDetail(null); setDetailError(''); void loadDetail();
+    return () => { detailVersion.current++; };
+  }, [selected]);
+  async function refresh(background = false, afterMutation = false) {
+    await refreshOrderView({ loadList: () => loader.load(query, background), loadWorkers, loadDetail, selected, reportId, afterMutation });
+    const current = loader.getSnapshot().data;
+    if (current && current.page !== query.page && !loader.getSnapshot().error) setPage(current.page);
+  }
+  latestRefresh.current = refresh;
   useEffect(() => {
     const id = window.setInterval(() => {
       setClock((x) => x + 1);
-      if (!document.hidden && !busy && !modal && !reportId && page === 1) void refresh(true);
+      if (!document.hidden && !loading && !busy && !modal && !reportId) void refresh(true);
     }, 15000);
     return () => clearInterval(id);
-  }, [account.id, worker, staff, busy, modal, reportId, page]);
+  }, [loader, query, loading, busy, modal, reportId, selected, loadDetail, loadWorkers]);
+  useEffect(() => {
+    const handleFocus = () => { if (!document.hidden && !busy && !modal && !reportId) void refresh(true); };
+    window.addEventListener('focus', handleFocus);
+    return () => window.removeEventListener('focus', handleFocus);
+  }, [loader, query, busy, modal, reportId, selected, loadDetail, loadWorkers]);
   useEffect(() => {
     if (!notice) return;
     const id = setTimeout(() => setNotice(''), 5000);
     return () => clearTimeout(id);
   }, [notice]);
   async function run(action: () => Promise<unknown>, message = 'Сохранено.') {
-    setBusy(true);
-    setError('');
+    if (mutationInFlight.current) throw new Error('Дождитесь завершения текущего действия.');
+    mutationInFlight.current = true;
+    setBusy(true); setError('');
     try {
       await action();
       setNotice(message);
-      await refresh(true);
+      // A refresh failure must not pretend that a committed action failed.
+      await latestRefresh.current(false, true);
     } catch (err) {
       fail(err);
+      if (err instanceof ApiError && (err.status === 409 || err.status === 404 || err.status === 403)) await latestRefresh.current(false, true);
       throw err;
-    } finally {
-      setBusy(false);
-    }
+    } finally { mutationInFlight.current = false; setBusy(false); }
   }
-  async function loadMore() {
-    setLoading(true);
-    try {
-      const data = await api.orders(page + 1);
-      setOrders((old) => [...old, ...data.filter((o) => !old.some((x) => x.id === o.id))]);
-      setPage((p) => p + 1);
-      setMore(data.length === 100);
-    } catch (err) {
-      fail(err);
-    } finally {
-      setLoading(false);
-    }
-  }
-  const active = orders.filter((o) =>
-    ['workerOnTheWay', 'inProgress', 'rework'].includes(o.status),
-  );
-  const reviews = orders.filter(
-    (o) => (dispatcher && o.status === 'workFinished') || (admin && o.status === 'approved'),
-  );
-  const shown = orders
-    .filter((o) => view !== 'quality' || reviews.includes(o))
-    .filter(
-      (o) =>
-        filter === 'all' ||
-        (filter === 'mine' && (o.initiatorId === account.id || o.executorId === account.id)) ||
-        (filter === 'active' && active.includes(o)) ||
-        (filter === 'review' && reviews.includes(o)) ||
-        o.status === filter,
-    )
-    .filter((o) =>
-      `${o.title} ${o.id} ${o.addressText} ${o.initiatorName}`
-        .toLowerCase()
-        .includes(search.toLowerCase()),
-    );
-  const chosen = orders.find((o) => o.id === selected);
-  const reporting = orders.find((o) => o.id === reportId);
+  const reviews = stats?.review ?? 0;
+  const shown = orders;
+  const chosen = detail?.id === selected ? detail : undefined;
+  const reporting = detail?.id === reportId ? detail : undefined;
   const avatars = workers.map(toWorker);
   for (const o of orders)
     if (o.executorId && !avatars.some((w) => w.id === o.executorId))
@@ -261,7 +295,7 @@ export default function ConnectedDashboard({
         form.append('Photos', blob, 'report.jpg');
       }
     }
-    await run(() => api.report(reporting.id, form), 'Отчёт отправлен диспетчеру.');
+    await run(() => api.report(reporting.id, form), 'Отчёт отправлен клиенту.');
     setReportId(null);
   }
   return (
@@ -288,14 +322,15 @@ export default function ConnectedDashboard({
                 aria-current={view === key ? 'page' : undefined}
                 onClick={() => {
                   setView(key);
+                  setQueue(undefined);
                   setFilter('all');
                   setSearch('');
                 }}
               >
                 <Icon size={19} />
                 <span>{worker && key === 'team' ? 'Мой слот' : label}</span>
-                {key === 'quality' && reviews.length > 0 && (
-                  <span className="nav-count">{reviews.length}</span>
+                {key === 'quality' && reviews > 0 && (
+                  <span className="nav-count">{reviews}</span>
                 )}
               </button>
             );
@@ -342,7 +377,27 @@ export default function ConnectedDashboard({
             </button>
           </div>
         </header>
+        {demoPanel && <div className="demo-banner">{demoPanel}</div>}
         <main className="main-content">
+          {superAdmin && (view === 'orders' || view === 'quality') && (
+            <section className="admin-queues" aria-label="Центр управления заявками">
+              <div className="admin-queues-heading"><div><span className="eyebrow">Центр управления</span><h2>Что требует внимания</h2></div>
+                <button className="text-button" onClick={() => { setQueue(undefined); setView('orders'); setFilter('all'); setSearch(''); }}>Все заявки</button>
+              </div>
+              <div className="admin-queue-grid">{adminQueues.map((item) => (
+                <button key={item.status} className={`admin-queue ${queue === item.status ? 'selected' : ''}`}
+                  aria-pressed={queue === item.status} onClick={() => {
+
+                    setQueue(item.status); setView('orders'); setFilter('all'); setSearch(''); setSelected(null);
+                  }}>
+                  <span>{item.title}</span><strong>{stats ? queueCounts.find((x) => x.status === item.status)?.count ?? 0 : '—'}</strong>
+                  <small>{item.description}</small>
+                </button>
+              ))}</div>
+              <p className="muted">Счётчики учитывают все заявки. Откройте карточку из очереди, чтобы выполнить действие.</p>
+              <button className="text-button" onClick={() => { setView('users'); setQueue(undefined); }}>Управление пользователями →</button>
+            </section>
+          )}
           <div className="page-heading">
             <div>
               <span className="greeting">Здравствуйте, {account.name}</span>
@@ -351,7 +406,7 @@ export default function ConnectedDashboard({
                 {view === 'orders'
                   ? 'Заявки, которые доступны вам по роли.'
                   : view === 'quality'
-                    ? 'Проверьте отчёты и подтвердите результат.'
+                    ? 'Работы, ожидающие приёмки клиентом.'
                     : 'Вся нужная информация — здесь.'}
               </p>
             </div>
@@ -376,6 +431,7 @@ export default function ConnectedDashboard({
               {error}
             </p>
           )}
+          {workersError && <p className="error" role="alert">{workersError} <button className="text-button" onClick={() => void loadWorkers()}>Повторить загрузку специалистов</button></p>}
           {notice && (
             <p className="success" role="status">
               {notice}
@@ -385,12 +441,12 @@ export default function ConnectedDashboard({
             <>
               <div className="metrics live-metrics">
                 {[
-                  ['Всего загружено', orders.length, 'all'],
-                  ['В работе', active.length, 'active'],
-                  ['На проверке', reviews.length, 'review'],
-                  ['Закрыто', orders.filter((o) => o.status === 'completed').length, 'completed'],
+                  ['Всего доступно', stats?.total ?? '—', 'all'],
+                  ['В работе', stats?.active ?? '—', 'active'],
+                  ['Приёмка', stats?.review ?? '—', 'review'],
+                  ['Закрыто', stats?.completed ?? '—', 'completed'],
                 ].map(([label, count, f]) => (
-                  <button className="metric" key={label} onClick={() => setFilter(String(f))}>
+                  <button className="metric" key={label} onClick={() => { setQueue(undefined); setFilter(String(f)); }}>
                     <span className="metric-top">{label}</span>
                     <strong className="metric-value">{count}</strong>
                   </button>
@@ -398,8 +454,8 @@ export default function ConnectedDashboard({
               </div>
               <section className="panel">
                 <header className="panel-heading">
-                  <h2>{view === 'quality' ? 'Приёмка работ' : 'Очередь заявок'}</h2>
-                  <span className="count">{shown.length}</span>
+                  <h2>{queue ? adminQueues.find((x) => x.status === queue)?.title : view === 'quality' ? 'Приёмка работ' : 'Очередь заявок'}</h2>
+                  <span className="count">{list.data?.totalCount ?? '—'}</span>
                 </header>
                 <div className="orders-toolbar">
                   <div className="tabs">
@@ -426,7 +482,7 @@ export default function ConnectedDashboard({
                       <select
                         aria-label="Статус заявки"
                         value={['all', 'mine', 'active', 'review'].includes(filter) ? '' : filter}
-                        onChange={(e) => setFilter(e.target.value || 'all')}
+                        onChange={(e) => { setQueue(undefined); setFilter(e.target.value || 'all'); }}
                       >
                         <option value="">Все статусы</option>
                         {Object.entries(statusMap).map(([key, s]) => (
@@ -439,32 +495,34 @@ export default function ConnectedDashboard({
                   </div>
                   <SearchField value={search} onChange={setSearch} />
                 </div>
-                {loading && !orders.length ? (
-                  <p className="loading" role="status">
-                    Загружаем заявки…
-                  </p>
-                ) : shown.length ? (
+                {list.error != null && (
+                  <div className="error" role="alert">
+                    {list.error instanceof Error ? list.error.message : 'Не удалось загрузить заявки.'}
+                    {list.data && <p>Показаны ранее загруженные данные. Они могут быть устаревшими.</p>}
+                    <button className="button secondary" disabled={loading} onClick={() => void refresh()}>Повторить загрузку</button>
+                  </div>
+                )}
+                {loading && <p className="loading" role="status">{list.data ? 'Обновляем список…' : 'Загружаем заявки…'}</p>}
+                {shown.length ? (
                   <OrdersTable
                     orders={shown.map(toOrder)}
                     workers={avatars}
                     onSelect={setSelected}
                   />
-                ) : (
+                ) : list.data && !list.error ? (
                   <Empty
                     title="Заявок пока нет"
                     text="Здесь появятся ваши заявки. Попробуйте изменить фильтр."
                   />
-                )}
-                {more && (
-                  <div className="panel-heading">
-                    <button
-                      className="button secondary"
-                      disabled={loading}
-                      onClick={() => void loadMore()}
-                    >
-                      Загрузить ещё
-                    </button>
-                  </div>
+                ) : null}
+                {list.data && (
+                  <nav className="pagination" aria-label="Страницы заявок">
+                    <button className="button secondary" disabled={loading || busy || list.data.page <= 1}
+                      onClick={() => setPage(list.data!.page - 1)}>Назад</button>
+                    <span role="status">Страница {list.data.page} из {Math.max(1, Math.ceil(list.data.totalCount / list.data.pageSize))} · Найдено: {list.data.totalCount}</span>
+                    <button className="button secondary" disabled={loading || busy || list.data.page * list.data.pageSize >= list.data.totalCount}
+                      onClick={() => setPage(list.data!.page + 1)}>Далее</button>
+                  </nav>
                 )}
               </section>
             </>
@@ -534,7 +592,7 @@ export default function ConnectedDashboard({
                   </article>
                 ))}
               </div>
-              {!workers.length && (
+              {!workers.length && !workersError && (
                 <Empty
                   title="Специалистов пока нет"
                   text="Суперадминистратор может назначить роль работяги зарегистрированному пользователю."
@@ -580,6 +638,7 @@ export default function ConnectedDashboard({
               aria-current={view === key ? 'page' : undefined}
               onClick={() => {
                 setView(key);
+                setQueue(undefined);
                 setFilter('all');
                 setSearch('');
               }}
@@ -597,17 +656,21 @@ export default function ConnectedDashboard({
           defaultAddress={addressText(account.address)}
           onClose={() => setModal(null)}
           onSave={async (input) => {
+            let createdId: string | undefined;
             await run(
-              () =>
-                api.createOrder({
+              async () => {
+                const created = await api.createOrder({
                   title: input.title,
                   orderType: input.type,
                   comment: input.comment,
                   addressText: input.address,
                   scheduledAt: input.scheduledAt ? new Date(input.scheduledAt).toISOString() : null,
-                }),
+                });
+                createdId = created.id;
+              },
               'Заявка отправлена на модерацию.',
             );
+            if (createdId) setSelected(createdId);
           }}
         />
       )}
@@ -685,16 +748,23 @@ export default function ConnectedDashboard({
           order={chosen}
           account={account}
           workers={workers}
-          busy={busy}
+          busy={busy || detailLoading || !!detailError}
+          refreshError={detailError}
+          refreshing={detailLoading}
+          onRefresh={() => void loadDetail()}
           run={run}
-          onCancelled={() => {
-            setOrders((current) =>
-              current.map((o) => (o.id === chosen.id ? { ...o, status: 'cancelled' } : o)),
-            );
-          }}
+          onCancelled={() => setReportId(null)}
           onClose={() => setSelected(null)}
           onReport={() => setReportId(chosen.id)}
         />
+      )}
+      {selected && !chosen && !reporting && (
+        <Dialog title="Карточка заявки" onClose={() => setSelected(null)} drawer>
+          <div className="dialog-body">
+            {detailLoading ? <p role="status">Загружаем заявку…</p> : <p className="error" role="alert">{detailError || 'Заявка недоступна.'}</p>}
+            <button className="button secondary" disabled={detailLoading} onClick={() => void loadDetail()}>Повторить загрузку карточки</button>
+          </div>
+        </Dialog>
       )}
       {reporting && (
         <ReportForm
@@ -716,6 +786,9 @@ function LiveDetails({
   onClose,
   onReport,
   onCancelled,
+  refreshError,
+  refreshing,
+  onRefresh,
 }: {
   order: ApiOrder;
   account: Account;
@@ -725,6 +798,9 @@ function LiveDetails({
   onClose: () => void;
   onReport: () => void;
   onCancelled: () => void;
+  refreshError: string;
+  refreshing: boolean;
+  onRefresh: () => void;
 }) {
   const [messages, setMessages] = useState<ApiMessage[]>([]);
   const [historyRevision, setHistoryRevision] = useState(0);
@@ -742,6 +818,7 @@ function LiveDetails({
   const dispatcher = roles.includes('Dispatcher') || roles.includes('SuperAdmin');
   const worker = roles.includes('Worker');
   const mine = order.executorId === account.id;
+  const canAccept = canReviewWork(order, account.id);
   useEffect(() => {
     let active = true;
     async function load() {
@@ -781,6 +858,8 @@ function LiveDetails({
       drawer
     >
       <div className="dialog-body details">
+        {refreshError && <p className="error" role="alert">{refreshError} Действия временно недоступны до обновления карточки.</p>}
+        <button className="button secondary" disabled={refreshing} onClick={onRefresh}>{refreshing ? 'Обновляем…' : 'Обновить карточку'}</button>
         <Badge status={statusMap[order.status]} />
         <div className="detail-facts">
           <div>
@@ -861,6 +940,9 @@ function LiveDetails({
               Позвонить
             </a>
           )}
+          {dispatcher && order.executorId && ['workerOnTheWay', 'inProgress', 'rework'].includes(order.status) && (
+            <ReassignExecutorForm key={`${order.id}:${order.updated}`} order={order} workers={workers} busy={busy} act={act} />
+          )}
           {dispatcher && order.status === 'published' && (
             <form
               className="form"
@@ -888,6 +970,14 @@ function LiveDetails({
             </form>
           )}
         </section>
+        <OrderPrice key={`${order.id}:${order.updated}`} order={order} account={account} busy={busy} act={act} />
+        {['workFinished', 'approved'].includes(order.status) && (
+          <p className="notice">
+            {canAccept
+              ? 'Проверьте отчёт и фотографии. Принять работу — завершить заявку. Если есть замечания, верните её на доработку с описанием.'
+              : 'Отчёт ожидает решения клиента. Только владелец заявки может принять работу или вернуть её на доработку.'}
+          </p>
+        )}
         {order.reportSubmittedAt && (
           <section className="detail-section">
             <h3>Отчёт о работе</h3>
@@ -914,18 +1004,18 @@ function LiveDetails({
             </small>
             {order.reviewFeedback && (
               <p className="notice preserve-lines">
-                Комментарий диспетчера: {order.reviewFeedback}
+                Замечание к отчёту: {order.reviewFeedback}
               </p>
             )}
           </section>
         )}
-        {dispatcher && order.status === 'workFinished' && rework && (
+        {canAccept && rework && (
           <form
             className="form"
             onSubmit={async (e) => {
               e.preventDefault();
               await act(async () => {
-                await api.review(order.id, false, feedback);
+                await api.review(order.id, false, order.updated, feedback.trim());
                 setRework(false);
               }, 'Отчёт возвращён на доработку.');
             }}
@@ -939,7 +1029,7 @@ function LiveDetails({
                 maxLength={2000}
               />
             </label>
-            <button className="button secondary" disabled={busy}>
+            <button className="button secondary" disabled={busy || !feedback.trim()}>
               Вернуть на доработку
             </button>
           </form>
@@ -1048,7 +1138,7 @@ function LiveDetails({
         {worker && mine && order.status === 'workerOnTheWay' && (
           <button
             className="button primary"
-            disabled={busy}
+            disabled={busy || !priceAgreed(order)}
             onClick={() => void act(() => api.status(order.id, 'inProgress'), 'Работа начата.')}
           >
             Я на месте · начать работу
@@ -1059,28 +1149,19 @@ function LiveDetails({
             Заполнить отчёт
           </button>
         )}
-        {dispatcher && order.status === 'workFinished' && (
+        {canAccept && (
           <>
             <button
               className="button primary"
               disabled={busy}
-              onClick={() => void act(() => api.review(order.id, true), 'Выполнение подтверждено.')}
+              onClick={() => void act(() => api.review(order.id, true, order.updated), 'Работа принята. Заявка завершена.')}
             >
-              Подтвердить выполнение
+              Принять работу
             </button>
             <button className="button secondary" disabled={busy} onClick={() => setRework(true)}>
               На доработку
             </button>
           </>
-        )}
-        {admin && order.status === 'approved' && (
-          <button
-            className="button primary"
-            disabled={busy}
-            onClick={() => void act(() => api.status(order.id, 'completed'), 'Заявка закрыта.')}
-          >
-            Закрыть заявку
-          </button>
         )}
       </footer>
       {zoom && (
@@ -1102,9 +1183,9 @@ function UsersPanel({
   run: (action: () => Promise<unknown>, message?: string) => Promise<void>;
 }) {
   const [users, setUsers] = useState<ApiUser[]>([]);
+  const [more, setMore] = useState(false);
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
-  const [more, setMore] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   async function load(p = 1, append = false) {

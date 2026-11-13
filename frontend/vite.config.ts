@@ -10,7 +10,7 @@ export default defineConfig(({ mode }) => {
       strictPort: true,
       proxy: {
         '/api': {
-          target: env.API_PROXY_TARGET || 'http://localhost:5160',
+          target: env.API_PROXY_TARGET || (mode === 'demo' ? 'http://127.0.0.1:5189' : 'http://localhost:5160'),
           changeOrigin: true,
         },
       },

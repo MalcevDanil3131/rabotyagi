@@ -1,6 +1,7 @@
 bin/
 obj/
 .tools/
+.demo/
 /packages/
 riderModule.iml
 /_ReSharper.Caches/
@@ -20,6 +21,7 @@ dist/
 .env
 .env.*
 !.env.example
+!.env.production.example
 
 # Local databases and backups
 *.db
@@ -27,6 +29,8 @@ dist/
 *.sqlite3
 *.bak
 *.dump
+/.backups/
+*.zip.gpg
 pgdata/
 
 # Test results

@@ -1,5 +1,9 @@
 ﻿**/.dockerignore
 **/.env
+**/.env.*
+**/.demo
+**/appsettings.json
+**/appsettings.Development.json
 **/.git
 **/.gitignore
 **/.project
@@ -26,4 +30,6 @@ README.md
 frontend/
 tests/
 .pnpm-store/
+.tools/
+.backups/
 !.dockerignore

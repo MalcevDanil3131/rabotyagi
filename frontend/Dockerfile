@@ -11,6 +11,11 @@ COPY . .
 ENV VITE_API_BASE_URL=""
 RUN pnpm run build
 
+FROM caddy:2-alpine AS production
+
+COPY Caddyfile /etc/caddy/Caddyfile
+COPY --from=build /app/dist /srv
+
 FROM nginx:stable-alpine AS runtime
 
 COPY nginx.conf /etc/nginx/conf.d/default.conf
