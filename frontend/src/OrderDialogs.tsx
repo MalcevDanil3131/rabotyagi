@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { ArrowRight, ImagePlus, Trash2, Send } from 'lucide-react';
 import { CategoryIcon, Dialog } from './components';
+import { PhotoGuide } from './OrderHints';
 import { categories } from './domain';
 import type { Order, OrderType, Report, Photo } from './domain';
 
@@ -238,9 +239,14 @@ export function ReportForm({
             </label>
           ))}
         </fieldset>
+        <PhotoGuide orderType={order.type} compact />
         <div>
           <span className="field-label">Фото результата</span>
           <p className="muted">До 4 фотографий · JPG, PNG, WebP · до 10 МБ каждая</p>
+          <p className="photo-upload-note">
+            Сначала снимите кадры по чек-листу выше, затем приложите ключевые. Если обязательный
+            кадр снять нельзя — напишите причину в обсуждении заявки.
+          </p>
           <div className="photo-grid editable">
             {photos.map((photo) => (
               <div key={photo.id}>
@@ -264,6 +270,7 @@ export function ReportForm({
               <input
                 type="file"
                 accept="image/jpeg,image/png,image/webp"
+                capture="environment"
                 multiple
                 disabled={busy}
                 onChange={(e) => {

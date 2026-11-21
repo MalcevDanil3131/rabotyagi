@@ -14,15 +14,18 @@ import {
   Clock3,
   ArrowRight,
   UserRound,
+  CircleHelp,
 } from 'lucide-react';
 import { api, ApiError, photoUrl } from './api';
 import type { Account, Address, ApiOrder, ApiWorker, ApiUser, ApiMessage, ApiStatus } from './api';
 import { Avatar, Badge, Dialog, Empty, OrdersTable, SearchField } from './components';
 import { CreateOrder, ReportForm } from './OrderDialogs';
 import { OrderHistory } from './OrderHistory';
+import { OrderHints, RegulationGuide, WorkflowProgress } from './OrderHints';
 import { AddressForm, PasswordForm } from './LiveWorkspace';
 import { categories, formatDate, formatTime, statuses } from './domain';
-import type { Order, Worker, Status, Report, Photo } from './domain';
+import type { Order, OrderType, Worker, Status, Report, Photo } from './domain';
+import { getOrderHints, resolveHintRole } from './workflowHints';
 
 const roleLabels: Record<string, string> = {
   User: 'Клиент',
@@ -127,6 +130,7 @@ export default function ConnectedDashboard({
   const [selected, setSelected] = useState<string | null>(null);
   const [reportId, setReportId] = useState<string | null>(null);
   const [modal, setModal] = useState<'create' | 'address' | 'password' | 'slot' | null>(null);
+  const [guide, setGuide] = useState<OrderType | null>(null);
   const [slotHours, setSlotHours] = useState(4);
   const [, setClock] = useState(0);
   const roles = account.roles || [account.roleName];
@@ -324,6 +328,13 @@ export default function ConnectedDashboard({
             <strong>{views[view][0]}</strong>
           </div>
           <div className="topbar-actions">
+            <button
+              className="icon-button"
+              aria-label="Открыть памятку по регламенту"
+              onClick={() => setGuide(chosen?.orderType ?? 'other')}
+            >
+              <CircleHelp size={18} />
+            </button>
             <button
               className="icon-button"
               aria-label="Обновить данные"
@@ -694,6 +705,7 @@ export default function ConnectedDashboard({
           }}
           onClose={() => setSelected(null)}
           onReport={() => setReportId(chosen.id)}
+          onOpenGuide={() => setGuide(chosen.orderType)}
         />
       )}
       {reporting && (
@@ -703,6 +715,7 @@ export default function ConnectedDashboard({
           onSave={submitReport}
         />
       )}
+      {guide !== null && <RegulationGuide orderType={guide} onClose={() => setGuide(null)} />}
     </div>
   );
 }
@@ -715,6 +728,7 @@ function LiveDetails({
   run,
   onClose,
   onReport,
+  onOpenGuide,
   onCancelled,
 }: {
   order: ApiOrder;
@@ -724,6 +738,7 @@ function LiveDetails({
   run: (action: () => Promise<unknown>, message?: string) => Promise<void>;
   onClose: () => void;
   onReport: () => void;
+  onOpenGuide: () => void;
   onCancelled: () => void;
 }) {
   const [messages, setMessages] = useState<ApiMessage[]>([]);
@@ -742,6 +757,13 @@ function LiveDetails({
   const dispatcher = roles.includes('Dispatcher') || roles.includes('SuperAdmin');
   const worker = roles.includes('Worker');
   const mine = order.executorId === account.id;
+  const hintRole = resolveHintRole({
+    status: order.status,
+    roles,
+    isInitiator: order.initiatorId === account.id,
+    isExecutor: mine,
+  });
+  const hints = getOrderHints(order.status, hintRole);
   useEffect(() => {
     let active = true;
     async function load() {
@@ -782,6 +804,8 @@ function LiveDetails({
     >
       <div className="dialog-body details">
         <Badge status={statusMap[order.status]} />
+        <WorkflowProgress status={order.status} />
+        <OrderHints hints={hints} onOpenGuide={onOpenGuide} />
         <div className="detail-facts">
           <div>
             <MapPin size={19} />
@@ -988,7 +1012,11 @@ function LiveDetails({
             </form>
           )}
         </section>
-        <OrderHistory key={order.id} orderId={order.id} revision={`${order.updated}:${historyRevision}`} />
+        <OrderHistory
+          key={order.id}
+          orderId={order.id}
+          revision={`${order.updated}:${historyRevision}`}
+        />
         {error && (
           <p className="error" role="alert">
             {error}
